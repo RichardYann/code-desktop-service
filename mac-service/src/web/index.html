@@ -1,0 +1,1176 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>code 桌面端服务管理</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --page: #f6f7f9;
+        --surface: rgba(255, 255, 255, 0.88);
+        --surface-strong: #ffffff;
+        --surface-muted: #f2f4f7;
+        --line: #dde2ea;
+        --line-soft: rgba(221, 226, 234, 0.72);
+        --text: #171a1f;
+        --muted: #6b7585;
+        --muted-strong: #4d5968;
+        --blue: #0a84ff;
+        --blue-soft: #edf6ff;
+        --green: #21c35e;
+        --green-soft: #e9f8ef;
+        --orange: #f59e0b;
+        --orange-soft: #fff6e4;
+        --red: #ff3b30;
+        --red-soft: #fff0ee;
+        --shadow: 0 18px 44px rgba(31, 41, 55, 0.08);
+        --overview-card-height: 456px;
+        --media-card-height: 476px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 18% 0%, rgba(10, 132, 255, 0.07), transparent 28%),
+          radial-gradient(circle at 88% 12%, rgba(33, 195, 94, 0.06), transparent 24%),
+          var(--page);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button {
+        min-height: 34px;
+        padding: 0 13px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-strong);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: #c8d0dc;
+      }
+
+      button.primary {
+        border-color: var(--blue);
+        background: var(--blue);
+        color: #ffffff;
+        font-weight: 650;
+      }
+
+      button.ghost {
+        background: transparent;
+      }
+
+      button.danger {
+        border-color: rgba(255, 59, 48, 0.36);
+        color: #d92d20;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.52;
+      }
+
+      .page {
+        width: min(1036px, calc(100vw - 48px));
+        margin: 0 auto;
+        padding: 26px 0 44px;
+      }
+
+      .page-header {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 14px;
+      }
+
+      .local-address {
+        min-width: 0;
+        color: var(--muted);
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .page-title {
+        display: inline-flex;
+        align-items: baseline;
+        justify-content: center;
+        gap: 8px;
+        min-width: 0;
+        text-align: center;
+        font-size: 21px;
+        font-weight: 500;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+
+      .page-title strong {
+        font-size: 22px;
+        font-weight: 760;
+      }
+
+      .title-certificate-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .header-actions {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.68);
+        color: var(--muted-strong);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        flex: 0 0 auto;
+        border-radius: 999px;
+        background: #a9b3c1;
+      }
+
+      .dot.ok {
+        background: var(--green);
+      }
+
+      .dot.warn {
+        background: var(--orange);
+      }
+
+      .dot.danger {
+        background: var(--red);
+      }
+
+      .overview-grid {
+        display: grid;
+        grid-template-columns: minmax(210px, 0.88fr) minmax(370px, 1.52fr) minmax(260px, 1fr);
+        gap: 12px;
+        align-items: stretch;
+      }
+
+      .overview-grid > .card {
+        height: var(--overview-card-height);
+      }
+
+      .card,
+      .secondary-panel {
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
+      }
+
+      .card {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px 12px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .card-title {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .card-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        padding: 14px 16px 16px;
+      }
+
+      .overview-grid > .card > .card-body {
+        overflow-y: auto;
+      }
+
+      .service-state {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 28px;
+        margin-bottom: 13px;
+        color: #15803d;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .meta-list {
+        display: grid;
+        gap: 9px;
+        margin: 0;
+      }
+
+      .meta-row {
+        display: grid;
+        grid-template-columns: 74px minmax(0, 1fr);
+        gap: 10px;
+        min-height: 22px;
+        align-items: baseline;
+        font-size: 12px;
+      }
+
+      .meta-row dt {
+        color: var(--muted);
+      }
+
+      .meta-row dd {
+        min-width: 0;
+        margin: 0;
+        color: var(--text);
+        overflow-wrap: anywhere;
+      }
+
+      .startup-control-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 9px;
+        min-width: 0;
+        margin-top: 12px;
+        color: var(--text);
+        font-size: 13px;
+      }
+
+      .startup-copy {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .startup-title {
+        font-weight: 650;
+      }
+
+      .startup-status {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .certificate-trust-status {
+        display: inline-flex;
+        align-items: center;
+        max-width: 188px;
+        min-height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--line-soft);
+        border-radius: 999px;
+        background: var(--surface-muted);
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .startup-switch {
+        position: relative;
+        width: 96px;
+        height: 34px;
+        min-height: 34px;
+        flex: 0 0 auto;
+        padding: 0;
+        border-radius: 999px;
+        border-color: #cfd7e3;
+        background: var(--surface-muted);
+        color: var(--muted-strong);
+        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.08);
+        overflow: hidden;
+        transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease;
+      }
+
+      .startup-switch-thumb {
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        z-index: 0;
+        width: 44px;
+        height: 26px;
+        border-radius: 999px;
+        background: #ffffff;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.16);
+        transition: transform 180ms ease;
+      }
+
+      .startup-switch-track {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        height: 100%;
+        align-items: center;
+      }
+
+      .startup-switch-label {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        place-items: center;
+        color: var(--muted-strong);
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1;
+        transition: color 160ms ease;
+      }
+
+      .startup-switch:not(.is-on) .startup-switch-off,
+      .startup-switch.is-on .startup-switch-on {
+        color: var(--text);
+      }
+
+      .startup-switch.is-on {
+        border-color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .startup-switch.is-on .startup-switch-thumb {
+        transform: translateX(46px);
+      }
+
+      .startup-switch:disabled {
+        opacity: 0.58;
+      }
+
+      .pairing-layout {
+        display: grid;
+        grid-template-columns: 160px minmax(0, 1fr);
+        gap: 16px;
+        align-items: center;
+      }
+
+      .qr-frame {
+        width: 160px;
+        height: 160px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #ffffff;
+        overflow: hidden;
+      }
+
+      .qr-frame.expired {
+        border-color: rgba(245, 158, 11, 0.44);
+        background: var(--orange-soft);
+      }
+
+      #pairing-qr {
+        width: 138px;
+        height: 138px;
+        display: none;
+      }
+
+      .qr-placeholder {
+        width: 120px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+        text-align: center;
+      }
+
+      .code-panel {
+        min-width: 0;
+      }
+
+      .code-label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .code-box {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-height: 72px;
+        margin: 7px 0 11px;
+        padding: 12px;
+        border-radius: 9px;
+        background: var(--surface-muted);
+      }
+
+      .code-value {
+        min-width: 0;
+        font-size: clamp(17px, 1.7vw, 22px);
+        font-weight: 760;
+        letter-spacing: 0;
+        white-space: nowrap;
+      }
+
+      .pairing-meta {
+        min-height: 33px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .device-list,
+      .audit-list {
+        display: grid;
+        align-content: start;
+        gap: 8px;
+      }
+
+      .bounded-list {
+        max-height: 286px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 8px;
+      }
+
+      #paired-devices {
+        flex: 1 1 auto;
+        max-height: none;
+        min-height: 0;
+      }
+
+      .local-web-list {
+        flex: 1 1 auto;
+        max-height: none;
+        min-height: 0;
+      }
+
+      .bounded-list::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      .bounded-list::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: rgba(107, 117, 133, 0.28);
+      }
+
+      .device-item,
+      .audit-item {
+        min-width: 0;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .device-item:last-child,
+      .audit-item:last-child {
+        border-bottom: 0;
+      }
+
+      .device-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .device-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .device-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: #15803d;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .device-status.warn {
+        color: #a16207;
+      }
+
+      .device-status.danger {
+        color: #b42318;
+      }
+
+      .device-meta,
+      .audit-meta,
+      .empty {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+
+      .device-meta {
+        margin-top: 5px;
+      }
+
+      .device-actions {
+        margin-top: 9px;
+      }
+
+      .preflight-card {
+        margin-top: 12px;
+      }
+
+      .media-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 12px;
+        align-items: stretch;
+        margin-top: 12px;
+      }
+
+      .media-grid > .card {
+        height: var(--media-card-height);
+      }
+
+      .media-storage-body {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .preflight-summary {
+        padding: 13px 16px;
+        border-bottom: 1px solid var(--line-soft);
+        color: var(--muted-strong);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .preflight-table {
+        padding: 0 16px 12px;
+      }
+
+      .preflight-row {
+        display: grid;
+        grid-template-columns: 170px minmax(0, 1fr) auto;
+        gap: 12px;
+        min-height: 36px;
+        align-items: center;
+        border-bottom: 1px solid var(--line-soft);
+        font-size: 13px;
+      }
+
+      .preflight-row:last-child {
+        border-bottom: 0;
+      }
+
+      .preflight-label {
+        color: var(--muted-strong);
+      }
+
+      .preflight-value {
+        min-width: 0;
+        color: var(--text);
+        overflow-wrap: anywhere;
+      }
+
+      .status-text {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        color: #15803d;
+        white-space: nowrap;
+      }
+
+      .status-text.warn {
+        color: #a16207;
+      }
+
+      .status-text.danger {
+        color: #b42318;
+      }
+
+      .secondary-panel {
+        margin-top: 12px;
+        overflow: hidden;
+      }
+
+      .secondary-panel summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 13px 16px;
+        color: var(--muted-strong);
+        font-size: 13px;
+        font-weight: 650;
+        cursor: pointer;
+        list-style: none;
+      }
+
+      .secondary-panel summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .secondary-panel[open] summary {
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .secondary-panel .card-body {
+        padding-top: 8px;
+      }
+
+      .audit-title {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .media-item-title {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 650;
+        overflow-wrap: anywhere;
+      }
+
+      .media-item-main {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        min-width: 0;
+      }
+
+      .media-item-content {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+
+      .media-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 10px;
+        align-items: center;
+        margin-top: 12px;
+      }
+
+      .media-search {
+        width: 100%;
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 10px;
+        background: var(--surface-strong);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+      }
+
+      .media-selection-meta {
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .media-select-all {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted-strong);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .media-select-all input {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+      }
+
+      .media-project {
+        display: grid;
+        gap: 8px;
+      }
+
+      .media-project + .media-project {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line-soft);
+      }
+
+      .media-project-title {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .media-project-meta {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+
+      .media-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 6px;
+      }
+
+      .media-action {
+        display: inline-flex;
+        align-items: center;
+        min-height: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--blue);
+        font: inherit;
+        font-size: 12px;
+        line-height: 1.45;
+        text-decoration: none;
+      }
+
+      .media-action.danger-text {
+        color: #d92d20;
+      }
+
+      .media-checkbox {
+        margin-top: 2px;
+        width: 16px;
+        height: 16px;
+        flex: 0 0 auto;
+      }
+
+      .project-root-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .project-root-status {
+        margin-top: 9px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .project-root-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .project-root-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 0;
+        border-top: 1px solid var(--line-soft);
+      }
+
+      .project-root-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .project-root-title span:first-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .project-root-meta {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+
+      .project-root-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .media-link {
+        display: inline-flex;
+        margin-top: 5px;
+        color: var(--blue);
+        font-size: 12px;
+        text-decoration: none;
+      }
+
+      #recent-media-assets {
+        flex: 1 1 auto;
+        max-height: none;
+        min-height: 0;
+        margin-top: 12px;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 22px;
+        z-index: 20;
+        padding: 9px 13px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+        color: var(--muted-strong);
+        font-size: 13px;
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-50%, 10px);
+        transition: opacity 160ms ease, transform 160ms ease;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+
+      @media (max-width: 940px) {
+        .overview-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .media-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .overview-grid > .card,
+        .media-grid > .card {
+          height: auto;
+        }
+
+        .project-root-item {
+          grid-template-columns: 1fr;
+        }
+
+        .pairing-layout {
+          grid-template-columns: 178px minmax(0, 1fr);
+        }
+
+        .qr-frame {
+          width: 178px;
+          height: 178px;
+        }
+
+        #pairing-qr {
+          width: 154px;
+          height: 154px;
+        }
+      }
+
+      @media (max-width: 680px) {
+        .page {
+          width: min(100vw - 24px, 560px);
+          padding-top: 18px;
+        }
+
+        .page-header {
+          grid-template-columns: 1fr;
+          gap: 11px;
+          text-align: center;
+        }
+
+        .local-address,
+        .header-actions {
+          justify-content: center;
+        }
+
+        .header-actions,
+        .title-certificate-actions {
+          flex-wrap: wrap;
+        }
+
+        .certificate-trust-status {
+          max-width: min(100%, 240px);
+        }
+
+        .pairing-layout,
+        .preflight-row,
+        .meta-row {
+          grid-template-columns: 1fr;
+        }
+
+        .qr-frame {
+          width: min(100%, 240px);
+          height: auto;
+          aspect-ratio: 1;
+          justify-self: center;
+        }
+
+        #pairing-qr {
+          width: calc(100% - 28px);
+          height: calc(100% - 28px);
+        }
+
+        .preflight-row {
+          gap: 4px;
+          padding: 9px 0;
+        }
+
+        .status-text {
+          justify-self: start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <div id="local-address" class="local-address">localhost</div>
+        <div class="page-title"><strong>code</strong><span>桌面端服务管理</span></div>
+        <div class="header-actions">
+          <span class="pill"><span id="service-dot" class="dot"></span><span id="service-status">正在检查</span></span>
+          <span id="certificate-trust-status" class="certificate-trust-status" title="请在本机 localhost 或 127.0.0.1 管理页安装信任。">本机信任</span>
+          <button id="trust-certificate" class="ghost" type="button" disabled>安装信任</button>
+          <button id="refresh-page" class="ghost">刷新</button>
+        </div>
+      </header>
+
+      <section class="overview-grid" aria-label="服务概览">
+        <article class="card">
+          <div class="card-header">
+            <h2 class="card-title">服务状态</h2>
+          </div>
+          <div class="card-body">
+            <div class="service-state">
+              <span id="service-state-dot" class="dot"></span>
+              <span id="service-detail">正在检查服务状态</span>
+            </div>
+            <dl class="meta-list">
+              <div class="meta-row">
+                <dt>版本</dt>
+                <dd id="service-version">待获取</dd>
+              </div>
+              <div class="meta-row">
+                <dt>端口</dt>
+                <dd id="service-port">待获取</dd>
+              </div>
+              <div class="meta-row">
+                <dt>地址</dt>
+                <dd id="service-url">待获取</dd>
+              </div>
+              <div class="meta-row">
+                <dt>进程</dt>
+                <dd id="service-process-id">待获取</dd>
+              </div>
+              <div class="meta-row">
+                <dt>启动</dt>
+                <dd id="service-started-at">待获取</dd>
+              </div>
+              <div class="meta-row">
+                <dt>运行</dt>
+                <dd id="service-uptime">待获取</dd>
+              </div>
+              <div class="meta-row">
+                <dt>证书</dt>
+                <dd id="tls-fingerprint">待获取</dd>
+              </div>
+              <div class="meta-row">
+                <dt>证书链</dt>
+                <dd id="certificate-mode">待获取</dd>
+              </div>
+              <div class="meta-row">
+                <dt>本机 CA</dt>
+                <dd id="certificate-ca-fingerprint">待获取</dd>
+              </div>
+            </dl>
+            <div class="startup-control-row">
+              <span class="startup-copy">
+                <span class="startup-title">开机自启动</span>
+                <span id="startup-status" class="startup-status">正在读取</span>
+              </span>
+              <button id="startup-toggle" class="startup-switch" type="button" role="switch" aria-checked="false" aria-label="开启或关闭开机自启动" data-enabled="false" disabled>
+                <span class="startup-switch-track" aria-hidden="true">
+                  <span class="startup-switch-label startup-switch-off">关闭</span>
+                  <span class="startup-switch-label startup-switch-on">开启</span>
+                  <span class="startup-switch-thumb"></span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <h2 class="card-title">配对二维码</h2>
+            <span class="pill"><span id="pairing-countdown">等待生成</span></span>
+          </div>
+          <div class="card-body pairing-layout">
+            <div class="qr-frame">
+              <img id="pairing-qr" alt="code 配对二维码" />
+              <div id="qr-placeholder" class="qr-placeholder">正在生成二维码</div>
+            </div>
+            <div class="code-panel">
+              <div class="code-label">备用配对码</div>
+              <div class="code-box">
+                <span id="pairing-code" class="code-value">未生成</span>
+                <button id="copy-code" class="ghost" type="button" disabled>复制备用文本</button>
+              </div>
+              <div id="pairing-meta" class="pairing-meta">生成后可扫码；复制备用文本可在鸿蒙端粘贴配对。</div>
+              <button id="create-pairing" class="primary" type="button">重新生成</button>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <h2 class="card-title">已配对的 HarmonyOS 设备</h2>
+          </div>
+          <div id="paired-devices" class="card-body device-list bounded-list">
+            <div class="empty">暂无设备</div>
+          </div>
+        </article>
+      </section>
+
+      <section class="card preflight-card" aria-label="Codex 预检">
+        <div class="card-header">
+          <h2 class="card-title">Codex 预检</h2>
+          <span class="pill"><span id="preflight-dot" class="dot"></span><span id="preflight-status">等待</span></span>
+        </div>
+        <div id="codex-preflight-summary" class="preflight-summary">等待 Codex 预检结果</div>
+        <div class="preflight-table">
+          <div class="preflight-row">
+            <div class="preflight-label">Codex CLI</div>
+            <div id="codex-cli" class="preflight-value">待获取</div>
+            <div id="codex-cli-status" class="status-text"><span class="dot"></span><span>等待</span></div>
+          </div>
+          <div class="preflight-row">
+            <div class="preflight-label">官方接入通道</div>
+            <div id="codex-channel" class="preflight-value">待获取</div>
+            <div id="codex-channel-status" class="status-text"><span class="dot"></span><span>等待</span></div>
+          </div>
+          <div class="preflight-row">
+            <div class="preflight-label">remote-control</div>
+            <div id="codex-remote-control" class="preflight-value">待获取</div>
+            <div id="codex-remote-control-status" class="status-text"><span class="dot"></span><span>等待</span></div>
+          </div>
+          <div class="preflight-row">
+            <div class="preflight-label">Provider</div>
+            <div id="codex-provider" class="preflight-value">待获取</div>
+            <div id="codex-provider-status" class="status-text"><span class="dot"></span><span>等待</span></div>
+          </div>
+          <div class="preflight-row">
+            <div class="preflight-label">Model</div>
+            <div id="codex-model" class="preflight-value">待获取</div>
+            <div id="codex-model-status" class="status-text"><span class="dot"></span><span>等待</span></div>
+          </div>
+          <div class="preflight-row">
+            <div class="preflight-label">认证</div>
+            <div id="codex-auth" class="preflight-value">待获取</div>
+            <div id="codex-auth-status" class="status-text"><span class="dot"></span><span>等待</span></div>
+          </div>
+          <div class="preflight-row">
+            <div class="preflight-label">会话能力</div>
+            <div id="codex-capabilities" class="preflight-value">待获取</div>
+            <div id="codex-capabilities-status" class="status-text"><span class="dot"></span><span>等待</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card preflight-card" aria-label="项目根目录">
+        <div class="card-header">
+          <h2 class="card-title">项目根目录</h2>
+        </div>
+        <div class="card-body">
+          <div class="project-root-actions">
+            <button id="choose-project-root" class="primary" type="button">选择文件夹</button>
+          </div>
+          <div id="project-root-status" class="project-root-status">
+            项目根目录只用于移动端新建项目和创建新会话时选择创建位置，不会过滤或隐藏已经识别到的桌面端项目和历史对话。CODE_PROJECT_ROOTS 启动项会作为预置根目录显示。
+          </div>
+          <div id="project-roots" class="project-root-list">
+            <div class="empty">暂无项目根目录</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="media-grid" aria-label="媒体和本地 Web">
+        <article class="card">
+          <div class="card-header">
+            <h2 class="card-title">媒体存储</h2>
+            <button id="clear-media-assets" class="ghost danger" type="button" disabled>批量清理</button>
+          </div>
+          <div class="card-body media-storage-body">
+            <dl class="meta-list">
+              <div class="meta-row">
+                <dt>占用</dt>
+                <dd id="media-storage-total">待获取</dd>
+              </div>
+            </dl>
+            <div class="media-toolbar">
+              <input id="media-search" class="media-search" type="search" placeholder="搜索项目、文件或会话" autocomplete="off" />
+              <label id="media-select-all-control" class="media-select-all" style="display: none;">
+                <input id="select-media-assets" type="checkbox" />
+                <span>全选</span>
+              </label>
+              <span id="media-selected-count" class="media-selection-meta">未选择文件</span>
+            </div>
+            <div id="recent-media-assets" class="audit-list bounded-list">
+              <div class="empty">暂无媒体产物</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <h2 class="card-title">本地 Web</h2>
+          </div>
+          <div id="local-web-sessions" class="card-body audit-list bounded-list local-web-list">
+            <div class="empty">暂无活动代理</div>
+          </div>
+        </article>
+      </section>
+
+      <details class="secondary-panel">
+        <summary>操作审计</summary>
+        <div id="audit-log" class="card-body audit-list">
+          <div class="empty">暂无审计记录</div>
+        </div>
+      </details>
+    </main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/web/main.js"></script>
+  </body>
+</html>

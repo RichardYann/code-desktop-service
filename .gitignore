@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Codex / local brainstorming artifacts
+.superpowers/
+.playwright-mcp/
+tmp/
+mac-service/tmp/
+
+# Dependencies
+node_modules/
+oh_modules/
+
+# Build outputs
+build/
+dist/
+coverage/
+.hvigor/
+.appanalyzer/
+.preview/
+.cxx/
+.test/
+
+# Local machine config
+local.properties
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
