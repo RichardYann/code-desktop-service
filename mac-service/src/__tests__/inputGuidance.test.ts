@@ -20,6 +20,14 @@ const capabilities: InstalledCodexCapability[] = [
     isAvailable: false
   },
   {
+    id: "skill:codex-system:imagegen",
+    kind: "skill",
+    name: "imagegen",
+    description: "Generate images",
+    source: "codex-system",
+    isAvailable: true
+  },
+  {
     id: "plugin:codex-cache:openai-curated/github",
     kind: "plugin",
     name: "GitHub",
@@ -67,6 +75,37 @@ describe("input guidance", () => {
     expect(text).not.toContain("Installed plugin");
     expect(text).not.toContain("/Users/");
     expect(text).not.toContain(".codex/plugins/cache");
+  });
+
+  it("injects a hidden imagegen command prefix for selected imagegen skill turns", () => {
+    const text = buildGuidedInput({
+      text: "帮我画一只可爱的耶耶",
+      guidance: {
+        mode: "guided",
+        selectedCapabilityIds: ["skill:codex-system:imagegen"]
+      },
+      capabilities
+    });
+
+    expect(text).toContain("Selected skill for this turn: imagegen");
+    expect(text).toContain("Injected command prefix: imagegen");
+    expect(text).toContain("</mobile-input-guidance>\n\nimagegen\n帮我画一只可爱的耶耶");
+    expect(stripMobileInputGuidance(text)).toBe("帮我画一只可爱的耶耶");
+  });
+
+  it("does not duplicate an existing imagegen command prefix", () => {
+    const text = buildGuidedInput({
+      text: "imagegen\n帮我画一只可爱的耶耶",
+      guidance: {
+        mode: "guided",
+        selectedCapabilityIds: ["skill:codex-system:imagegen"]
+      },
+      capabilities
+    });
+
+    expect(text).not.toContain("Injected command prefix: imagegen");
+    expect(text).toContain("</mobile-input-guidance>\n\nimagegen\n帮我画一只可爱的耶耶");
+    expect(stripMobileInputGuidance(text)).toBe("imagegen\n帮我画一只可爱的耶耶");
   });
 
   it("strips the private mobile guidance block from echoed user text", () => {

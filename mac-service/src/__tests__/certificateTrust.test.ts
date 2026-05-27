@@ -29,11 +29,68 @@ describe("certificate trust service", () => {
         "add-trusted-cert",
         "-r",
         "trustRoot",
+        "-p",
+        "ssl",
         "-k",
         "/Users/demo/Library/Keychains/login.keychain-db",
         "/Users/demo/Library/Application Support/code/certs/transport-ca-cert.pem"
       ]
     }]);
+  });
+
+  it("checks whether the macOS user trust store trusts the service certificate for SSL", async () => {
+    const calls: Array<{ file: string; args: string[] }> = [];
+    const service = createCertificateTrustService({
+      platform: "darwin",
+      homedir: () => "/Users/demo",
+      run: async (file, args) => {
+        calls.push({ file, args });
+        return { stdout: "...certificate verification successful.", stderr: "" };
+      }
+    });
+
+    const result = await service.checkLocalCertificateTrust({
+      serverCertPath: "/Users/demo/Library/Application Support/code/transport-cert.pem",
+      hostname: "localhost"
+    });
+
+    expect(result).toMatchObject({
+      supported: true,
+      trusted: true,
+      message: "当前用户已信任 code 本地开发 CA"
+    });
+    expect(calls).toEqual([{
+      file: "/usr/bin/security",
+      args: [
+        "verify-cert",
+        "-c",
+        "/Users/demo/Library/Application Support/code/transport-cert.pem",
+        "-p",
+        "ssl",
+        "-s",
+        "localhost",
+        "-L"
+      ]
+    }]);
+  });
+
+  it("reports untrusted when macOS SSL certificate verification fails", async () => {
+    const service = createCertificateTrustService({
+      platform: "darwin",
+      homedir: () => "/Users/demo",
+      run: async () => {
+        throw new Error("CSSMERR_TP_NOT_TRUSTED");
+      }
+    });
+
+    await expect(service.checkLocalCertificateTrust({
+      serverCertPath: "/Users/demo/Library/Application Support/code/transport-cert.pem",
+      hostname: "localhost"
+    })).resolves.toMatchObject({
+      supported: true,
+      trusted: false,
+      message: "当前用户尚未信任 code 本地开发 CA"
+    });
   });
 
   it("installs a local CA into the Windows current-user Root store", async () => {

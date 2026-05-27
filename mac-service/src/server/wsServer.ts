@@ -2106,7 +2106,7 @@ async function handleClientMessage(
       context.sessions.addSession(session);
       subscriber.syncedSessionIds.add(result.threadId);
       subscriber.activeDetailSessionId = result.threadId;
-      send(socket, { type: "session.updated", session });
+      send(socket, { type: "session.updated", requestId: result.requestId, session });
       send(socket, { type: "turn.status.updated", sessionId: result.threadId, turnId: result.turnId, status: "running" });
       sendReceivedMessage(socket, { messageId: result.requestId, sessionId: result.threadId, text: result.text, assetIds: result.attachmentIds });
       if (result.attachments && result.attachments.length > 0) {

@@ -6,6 +6,8 @@ export interface BonjourPublicationInput {
   macId: string;
   tlsFingerprint: string;
   tlsPublicKeyHash: string;
+  serviceUrl: string;
+  candidateServiceUrls: string[];
 }
 
 export type BonjourPublication = ServiceConfig & {
@@ -15,6 +17,8 @@ export type BonjourPublication = ServiceConfig & {
     macId: string;
     tlsFingerprint: string;
     tlsPublicKeyHash: string;
+    serviceUrl: string;
+    candidateServiceUrls: string;
   };
 };
 
@@ -32,6 +36,7 @@ export type BonjourFactory = () => BonjourInstance;
 
 export interface StartedBonjourPublication {
   stop: () => Promise<void>;
+  update: (input: BonjourPublicationInput) => Promise<void>;
 }
 
 function defaultBonjourFactory(): BonjourInstance {
@@ -54,25 +59,41 @@ export function buildBonjourPublication(input: BonjourPublicationInput): Bonjour
     protocol: "tcp",
     port: input.port,
     txt: {
-      product: "code",
-      macId: input.macId,
-      tlsFingerprint: input.tlsFingerprint,
-      tlsPublicKeyHash: input.tlsPublicKeyHash
-    }
-  };
+        product: "code",
+        macId: input.macId,
+        tlsFingerprint: input.tlsFingerprint,
+        tlsPublicKeyHash: input.tlsPublicKeyHash,
+        serviceUrl: input.serviceUrl,
+        candidateServiceUrls: input.candidateServiceUrls.join("|")
+      }
+    };
 }
 
 export async function startBonjourPublication(
   input: BonjourPublicationInput & { factory?: BonjourFactory }
 ): Promise<StartedBonjourPublication> {
   const bonjour = (input.factory ?? defaultBonjourFactory)();
-  const service = bonjour.publish(buildBonjourPublication(input));
-  service.start?.();
+  let currentInput: BonjourPublicationInput = input;
+  let service: BonjourServiceHandle = publishService(bonjour, currentInput);
 
   return {
+    update: async (nextInput: BonjourPublicationInput) => {
+      if (JSON.stringify(buildBonjourPublication(nextInput)) === JSON.stringify(buildBonjourPublication(currentInput))) {
+        return;
+      }
+      await callWithOptionalCallback(service.stop?.bind(service));
+      currentInput = nextInput;
+      service = publishService(bonjour, currentInput);
+    },
     stop: async () => {
       await callWithOptionalCallback(service.stop?.bind(service));
       await callWithOptionalCallback(bonjour.destroy?.bind(bonjour));
     }
   };
+}
+
+function publishService(bonjour: BonjourInstance, input: BonjourPublicationInput): BonjourServiceHandle {
+  const service = bonjour.publish(buildBonjourPublication(input));
+  service.start?.();
+  return service;
 }

@@ -629,6 +629,9 @@ describe("web management routes", () => {
 
     const qrFrame = new FakeElement("qr-frame");
     let startupEnabled = false;
+    let certificateTrusted = false;
+    const reload = vi.fn();
+    const windowLocation = { hostname: "127.0.0.1", port: "37631", reload };
     const confirm = vi.fn(() => true);
     const fetch = vi.fn(async (url: string, options?: { method?: string; body?: string; headers?: Record<string, string> }) => ({
       ok: true,
@@ -651,6 +654,11 @@ describe("web management routes", () => {
             tlsFingerprint: "abcdef1234567890",
             certificateMode: "local-ca",
             caFingerprint: "ca1234567890abcdef",
+            certificateTrustStatus: {
+              supported: true,
+              trusted: certificateTrusted,
+              message: certificateTrusted ? "当前用户已信任 code 本地开发 CA" : "当前用户尚未信任 code 本地开发 CA"
+            },
             certificateSubjectAltNames: {
               dnsNames: ["localhost"],
               ipAddresses: ["127.0.0.1"]
@@ -658,6 +666,7 @@ describe("web management routes", () => {
           };
         }
         if (url === "/api/certificate/trust") {
+          certificateTrusted = true;
           return {
             supported: true,
             trusted: true,
@@ -716,13 +725,13 @@ describe("web management routes", () => {
         clearInterval,
         clearTimeout,
         confirm,
-        location: { hostname: "127.0.0.1", port: "37631" },
+        location: windowLocation,
         setInterval,
         setTimeout
       }
     });
 
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 20; index += 1) {
       await Promise.resolve();
     }
 
@@ -736,7 +745,7 @@ describe("web management routes", () => {
     expect(elements.get("startup-status")?.textContent).toBe("已关闭");
 
     elements.get("startup-toggle")?.click();
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 20; index += 1) {
       await Promise.resolve();
     }
 
@@ -762,7 +771,7 @@ describe("web management routes", () => {
     expect(elements.get("startup-status")?.textContent).toBe("已关闭");
 
     elements.get("trust-certificate")?.click();
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 30; index += 1) {
       await Promise.resolve();
     }
 
@@ -773,10 +782,14 @@ describe("web management routes", () => {
         "x-code-management-action": "trust-local-ca"
       })
     }));
+    expect(elements.get("certificate-trust-status")?.textContent).toBe("本机已信任");
+    expect(elements.get("certificate-trust-status")?.attributes["title"]).toBe("当前用户已信任 code 本地开发 CA。浏览器重新加载后会重新校验证书。");
+    expect(elements.get("trust-certificate")?.disabled).toBe(true);
 
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(elements.get("service-uptime")?.textContent).toBe("2s");
+    expect(reload).toHaveBeenCalled();
   });
 
   it("reveals media checkboxes only after entering batch cleanup mode and confirms before deleting", async () => {

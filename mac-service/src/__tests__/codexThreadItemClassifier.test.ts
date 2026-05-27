@@ -66,4 +66,27 @@ describe("codex thread item classifier", () => {
     expect(classified?.visibleText).not.toContain("Selected skill");
     expect(classified?.visibleText).not.toContain("Installed skill");
   });
+
+  it("hides injected imagegen command prefixes from official user messages", () => {
+    const classified = classifyCodexThreadItem({
+      type: "userMessage",
+      text: [
+        "<mobile-input-guidance>",
+        "The mobile user selected local Codex capabilities for this turn.",
+        "- Selected skill for this turn: imagegen",
+        "- Injected command prefix: imagegen",
+        "</mobile-input-guidance>",
+        "",
+        "imagegen",
+        "帮我画一只可爱的耶耶"
+      ].join("\n")
+    });
+
+    expect(classified).toMatchObject({
+      kind: "userMessage",
+      visibleText: "帮我画一只可爱的耶耶"
+    });
+    expect(classified?.visibleText).not.toContain("imagegen");
+    expect(classified?.visibleText).not.toContain("<mobile-input-guidance>");
+  });
 });

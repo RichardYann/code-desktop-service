@@ -7,11 +7,18 @@ export interface TrustLocalCertificateInput {
   caFingerprint: string;
 }
 
-export interface CertificateTrustResult {
+export interface CheckLocalCertificateTrustInput {
+  serverCertPath: string;
+  hostname: string;
+}
+
+export interface CertificateTrustStatus {
   supported: boolean;
   trusted: boolean;
   message: string;
 }
+
+export type CertificateTrustResult = CertificateTrustStatus;
 
 export interface CertificateTrustRunResult {
   stdout: string;
@@ -31,6 +38,7 @@ export interface CertificateTrustServiceOptions {
 
 export interface CertificateTrustService {
   trustLocalCertificate(input: TrustLocalCertificateInput): Promise<CertificateTrustResult>;
+  checkLocalCertificateTrust(input: CheckLocalCertificateTrustInput): Promise<CertificateTrustStatus>;
 }
 
 const defaultRunner: CertificateTrustRunner = async (file, args) => {
@@ -54,6 +62,8 @@ export function createCertificateTrustService(
         "add-trusted-cert",
         "-r",
         "trustRoot",
+        "-p",
+        "ssl",
         "-k",
         path.join(homedir(), "Library", "Keychains", "login.keychain-db"),
         input.caCertPath
@@ -86,7 +96,44 @@ export function createCertificateTrustService(
     };
   }
 
+  async function checkLocalCertificateTrust(input: CheckLocalCertificateTrustInput): Promise<CertificateTrustStatus> {
+    const hostname = input.hostname.trim().length > 0 ? input.hostname.trim() : "localhost";
+
+    if (platform === "darwin") {
+      try {
+        await run("/usr/bin/security", [
+          "verify-cert",
+          "-c",
+          input.serverCertPath,
+          "-p",
+          "ssl",
+          "-s",
+          hostname,
+          "-L"
+        ]);
+        return {
+          supported: true,
+          trusted: true,
+          message: "当前用户已信任 code 本地开发 CA"
+        };
+      } catch {
+        return {
+          supported: true,
+          trusted: false,
+          message: "当前用户尚未信任 code 本地开发 CA"
+        };
+      }
+    }
+
+    return {
+      supported: false,
+      trusted: false,
+      message: "当前平台暂不支持自动检测本地信任状态"
+    };
+  }
+
   return {
-    trustLocalCertificate
+    trustLocalCertificate,
+    checkLocalCertificateTrust
   };
 }

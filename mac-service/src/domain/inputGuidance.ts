@@ -15,6 +15,8 @@ export interface BuildGuidedInputOptions {
 
 const MOBILE_INPUT_GUIDANCE_OPEN = "<mobile-input-guidance>";
 const MOBILE_INPUT_GUIDANCE_CLOSE = "</mobile-input-guidance>";
+const IMAGEGEN_COMMAND = "imagegen";
+const IMAGEGEN_INJECTED_PREFIX_MARKER = "- Injected command prefix: imagegen";
 
 function firstNonWhitespaceIndex(text: string): number {
   for (let index = 0; index < text.length; index++) {
@@ -36,8 +38,13 @@ export function stripMobileInputGuidance(text: string): string {
   if (closeIndex < 0) {
     return text;
   }
+  const guidanceBlock = candidate.slice(0, closeIndex);
   const rest = candidate.slice(closeIndex + MOBILE_INPUT_GUIDANCE_CLOSE.length);
-  return rest.slice(firstNonWhitespaceIndex(rest));
+  const visibleRest = rest.slice(firstNonWhitespaceIndex(rest));
+  if (guidanceBlock.includes(IMAGEGEN_INJECTED_PREFIX_MARKER)) {
+    return stripInjectedImagegenCommandPrefix(visibleRest);
+  }
+  return visibleRest;
 }
 
 function selectedCapabilities(input: BuildGuidedInputOptions): InstalledCodexCapability[] {
@@ -53,16 +60,59 @@ function selectedCapabilities(input: BuildGuidedInputOptions): InstalledCodexCap
   return selected;
 }
 
+function isImagegenCapability(capability: InstalledCodexCapability): boolean {
+  return capability.kind === "skill" && capability.name.trim().toLowerCase() === IMAGEGEN_COMMAND;
+}
+
+function textStartsWithImagegenCommand(text: string): boolean {
+  const startIndex = firstNonWhitespaceIndex(text);
+  const candidate = text.slice(startIndex);
+  if (candidate === IMAGEGEN_COMMAND) {
+    return true;
+  }
+  if (!candidate.startsWith(IMAGEGEN_COMMAND)) {
+    return false;
+  }
+  const nextChar = candidate.charAt(IMAGEGEN_COMMAND.length);
+  return nextChar === "\n" || nextChar === "\r" || nextChar === " " || nextChar === "\t";
+}
+
+function stripInjectedImagegenCommandPrefix(text: string): string {
+  const startIndex = firstNonWhitespaceIndex(text);
+  const candidate = text.slice(startIndex);
+  if (candidate === IMAGEGEN_COMMAND) {
+    return "";
+  }
+  if (candidate.startsWith(`${IMAGEGEN_COMMAND}\r\n`)) {
+    const rest = candidate.slice(IMAGEGEN_COMMAND.length + 2);
+    return rest.slice(firstNonWhitespaceIndex(rest));
+  }
+  if (candidate.startsWith(`${IMAGEGEN_COMMAND}\n`) || candidate.startsWith(`${IMAGEGEN_COMMAND}\r`)) {
+    const rest = candidate.slice(IMAGEGEN_COMMAND.length + 1);
+    return rest.slice(firstNonWhitespaceIndex(rest));
+  }
+  return text;
+}
+
 export function buildGuidedInput(input: BuildGuidedInputOptions): string {
   const selected = selectedCapabilities(input);
   if (input.guidance.mode === "plain" || selected.length === 0) {
     return input.text;
   }
 
+  const hasImagegenSelection = selected.some(isImagegenCapability);
+  const shouldInjectImagegenCommand = hasImagegenSelection && !textStartsWithImagegenCommand(input.text);
   const lines = selected.map((capability) => {
     const label = capability.kind === "skill" ? "Selected skill for this turn" : "Selected plugin for this turn";
     return `- ${label}: ${capability.name}`;
   });
+  if (hasImagegenSelection) {
+    lines.push("For selected imagegen turns, invoke the built-in image generation tool now; do not only announce or describe that an image will be generated.");
+  }
+  if (shouldInjectImagegenCommand) {
+    lines.push(IMAGEGEN_INJECTED_PREFIX_MARKER);
+  }
+  const bodyText = shouldInjectImagegenCommand ? `${IMAGEGEN_COMMAND}\n${input.text}` : input.text;
 
   return [
     "<mobile-input-guidance>",
@@ -72,6 +122,6 @@ export function buildGuidedInput(input: BuildGuidedInputOptions): string {
     ...lines,
     "</mobile-input-guidance>",
     "",
-    input.text
+    bodyText
   ].join("\n");
 }

@@ -24,7 +24,12 @@ import { createSessionInputQueueService } from "./domain/sessionInputQueueServic
 import { createSessionService } from "./domain/sessionService.js";
 import { createPairingService } from "./security/pairing.js";
 import { createCertificateTrustService } from "./security/certificateTrust.js";
-import { collectDefaultTransportSubjectAltNames, ensureTransportCertificate } from "./security/transport.js";
+import {
+  collectDefaultTransportSubjectAltNames,
+  ensureTransportCertificate,
+  type TransportCertificate,
+  type TransportSubjectAltNames
+} from "./security/transport.js";
 import { openDatabase } from "./storage/db.js";
 import { createRepositories } from "./storage/repositories.js";
 import { createDesktopPlatform, type DesktopPlatform } from "./platform/desktopPlatform.js";
@@ -36,6 +41,15 @@ type RuntimeConfigTurnStore = Pick<ReturnType<typeof createSessionRuntimeConfigS
 
 export interface CreateAppContextOptions {
   platform?: DesktopPlatform;
+  collectTransportSubjectAltNames?: () => TransportSubjectAltNames;
+}
+
+export interface RefreshTransportCertificateResult {
+  changed: boolean;
+  previousFingerprint: string;
+  nextFingerprint: string;
+  previousPublicKeyHash: string;
+  nextPublicKeyHash: string;
 }
 
 export async function runtimeConfigForTurn(
@@ -59,12 +73,14 @@ export async function runtimeConfigForTurn(
 
 export function createAppContext(config: ServiceConfig = loadConfig(), options: CreateAppContextOptions = {}) {
   const platform = options.platform ?? createDesktopPlatform();
+  const collectTransportSubjectAltNames = options.collectTransportSubjectAltNames ?? collectDefaultTransportSubjectAltNames;
   const codexCandidates = config.codexCandidates ?? platform.defaultCodexBinaryCandidates();
   const codexConnectionConfig = {
     codexBin: config.codexBin,
     codexCandidates
   };
-  const transport = ensureTransportCertificate(config.dataDir, collectDefaultTransportSubjectAltNames());
+  let transport = ensureTransportCertificate(config.dataDir, collectTransportSubjectAltNames());
+  let tls = readTransportTlsFiles(transport);
   const db = openDatabase("code-v1.sqlite", config);
   const repositories = createRepositories(db);
   const runtimeConfig = createSessionRuntimeConfigService(repositories);
@@ -83,15 +99,37 @@ export function createAppContext(config: ServiceConfig = loadConfig(), options: 
     }
   });
 
-  return {
+  const context = {
     config,
     serviceStartedAt: new Date().toISOString(),
     localMacName: platform.resolveDisplayName(),
     transport,
     certificateTrust: createCertificateTrustService(),
-    tls: {
-      cert: fs.readFileSync(transport.certPath),
-      key: fs.readFileSync(transport.keyPath)
+    tls,
+    refreshTransportCertificate: (): RefreshTransportCertificateResult => {
+      const previousFingerprint = context.transport.fingerprint;
+      const previousPublicKeyHash = context.transport.publicKeyHash;
+      const latestSubjectAltNames = collectTransportSubjectAltNames();
+      const nextTransport = ensureTransportCertificate(config.dataDir, {
+        dnsNames: context.transport.subjectAltNames.dnsNames,
+        ipAddresses: latestSubjectAltNames.ipAddresses
+      });
+      const changed = nextTransport.fingerprint !== previousFingerprint ||
+        nextTransport.publicKeyHash !== previousPublicKeyHash ||
+        JSON.stringify(nextTransport.subjectAltNames) !== JSON.stringify(context.transport.subjectAltNames);
+      if (changed) {
+        transport = nextTransport;
+        tls = readTransportTlsFiles(nextTransport);
+        context.transport = transport;
+        context.tls = tls;
+      }
+      return {
+        changed,
+        previousFingerprint,
+        nextFingerprint: context.transport.fingerprint,
+        previousPublicKeyHash,
+        nextPublicKeyHash: context.transport.publicKeyHash
+      };
     },
     db,
     repositories,
@@ -181,6 +219,14 @@ export function createAppContext(config: ServiceConfig = loadConfig(), options: 
       }
     }
   };
+  return context;
 }
 
 export type AppContext = ReturnType<typeof createAppContext>;
+
+function readTransportTlsFiles(transport: TransportCertificate): { cert: Buffer; key: Buffer } {
+  return {
+    cert: fs.readFileSync(transport.certPath),
+    key: fs.readFileSync(transport.keyPath)
+  };
+}

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,8 +13,26 @@ describe("http server", () => {
   });
 
   it("returns service health", async () => {
-    server = await createServer(createTestAppContext());
-    const response = await server.inject({ method: "GET", url: "/api/health" });
+    const context = createTestAppContext();
+    const checkLocalCertificateTrust = vi.fn(async () => ({
+      supported: true,
+      trusted: true,
+      message: "当前用户已信任 code 本地开发 CA"
+    }));
+    (context as unknown as {
+      certificateTrust: typeof context.certificateTrust & {
+        checkLocalCertificateTrust: typeof checkLocalCertificateTrust;
+      };
+    }).certificateTrust = {
+      ...context.certificateTrust,
+      checkLocalCertificateTrust
+    };
+    server = await createServer(context);
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/health",
+      headers: { host: "localhost:37631" }
+    });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       ok: true,
@@ -26,7 +44,16 @@ describe("http server", () => {
       macId: "local-mac",
       candidateServiceUrls: expect.arrayContaining([expect.stringMatching(/^https:\/\//)]),
       startedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
-      uptimeSeconds: expect.any(Number)
+      uptimeSeconds: expect.any(Number),
+      certificateTrustStatus: {
+        supported: true,
+        trusted: true,
+        message: "当前用户已信任 code 本地开发 CA"
+      }
+    });
+    expect(checkLocalCertificateTrust).toHaveBeenCalledWith({
+      serverCertPath: context.transport.certPath,
+      hostname: "localhost"
     });
   });
 

@@ -215,6 +215,36 @@ describe("command flow", () => {
     ]);
   });
 
+  it("echoes the create request id on the created session update", async () => {
+    const context = createTestAppContext();
+    context.codex.createSessionRuntime = async () =>
+      createRuntime({
+        listSessionSummaries: async () => [],
+        createSession: async () => ({ threadId: "thread-created", turnId: "turn-created", status: "running" })
+      });
+    server = await createServer(context);
+    await server.ready();
+    const { ws } = await openAuthedWs(context, server as TestServer);
+    const messages = collectWsMessages(ws);
+
+    sendCommand(ws, {
+      type: "session.create",
+      requestId: "create-session-match",
+      toolId: "codex-mac",
+      projectPath: null,
+      text: "创建后进入详情"
+    });
+    const update = await waitForWsMessage(messages, (message) => {
+      const session = asRecord(message.session);
+      return message.type === "session.updated" &&
+        message.requestId === "create-session-match" &&
+        session.id === "thread-created";
+    });
+
+    expect(update.requestId).toBe("create-session-match");
+    ws.terminate();
+  });
+
   it("parses approval response commands", () => {
     const parsed = ClientCommandSchema.parse({
       type: "approval.respond",
@@ -2223,6 +2253,51 @@ describe("command flow", () => {
       sessionId: "thread-guided",
       messageId: "message-guided",
       text: "实现一个控制台页面"
+    });
+  });
+
+  it("command-prefixes selected imagegen sends for Codex while keeping mobile echo raw", async () => {
+    const sentTexts: string[] = [];
+    const capabilities: InstalledCodexCapability[] = [{
+      id: "skill:codex-system:imagegen",
+      kind: "skill",
+      name: "imagegen",
+      description: "Generate images",
+      source: "codex-system",
+      isAvailable: true
+    }];
+    const router = createCommandRouter({
+      sessions: createRuntime({
+        startTurn: async (input) => {
+          sentTexts.push(turnInputText(input));
+          return { turnId: "turn-imagegen-guided", status: "running" };
+        }
+      }).sessions,
+      capabilities: () => capabilities
+    });
+
+    const result = await router.handle(ClientCommandSchema.parse({
+      type: "session.sendText",
+      requestId: "send-imagegen-guided",
+      sessionId: "thread-imagegen-guided",
+      clientMessageId: "message-imagegen-guided",
+      text: "帮我画一只可爱的耶耶",
+      guidance: {
+        mode: "guided",
+        selectedCapabilityIds: ["skill:codex-system:imagegen"]
+      }
+    }));
+
+    expect(sentTexts).toHaveLength(1);
+    expect(sentTexts[0]).toContain("Selected skill for this turn: imagegen");
+    expect(sentTexts[0]).toContain("Injected command prefix: imagegen");
+    expect(sentTexts[0]).toContain("</mobile-input-guidance>\n\nimagegen\n帮我画一只可爱的耶耶");
+    expect(result).toEqual({
+      kind: "message.received",
+      requestId: "send-imagegen-guided",
+      sessionId: "thread-imagegen-guided",
+      messageId: "message-imagegen-guided",
+      text: "帮我画一只可爱的耶耶"
     });
   });
 

@@ -45,15 +45,20 @@ function isLocalTrustHostname() {
   return hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || hostname.startsWith("127.");
 }
 
-function updateTrustCertificateControl(caFingerprint) {
+function updateTrustCertificateControl(caFingerprint, trustStatus = null) {
   latestCaFingerprint = caFingerprint || "";
   const trustCertificate = byId("trust-certificate");
   const isLocal = isLocalTrustHostname();
+  const isTrusted = Boolean(isLocal && trustStatus && trustStatus.trusted === true);
   if (trustCertificate && "disabled" in trustCertificate) {
-    trustCertificate.disabled = !latestCaFingerprint || !isLocal;
+    trustCertificate.disabled = !latestCaFingerprint || !isLocal || isTrusted;
   }
   if (!latestCaFingerprint) {
     setTrustCertificateStatus("等待本机 CA", "等待生成本机 CA 后可安装信任。");
+    return;
+  }
+  if (isTrusted) {
+    setTrustCertificateStatus("本机已信任", "当前用户已信任 code 本地开发 CA。浏览器重新加载后会重新校验证书。");
     return;
   }
   setTrustCertificateStatus(
@@ -414,7 +419,7 @@ async function refreshHealth() {
     text("tls-fingerprint", fingerprintPreview(health.tlsFingerprint));
     text("certificate-mode", certificateModeLabel(health.certificateMode));
     text("certificate-ca-fingerprint", fingerprintPreview(health.caFingerprint));
-    updateTrustCertificateControl(health.caFingerprint);
+    updateTrustCertificateControl(health.caFingerprint, health.certificateTrustStatus);
     text("local-address", serviceUrl ? serviceAddressPreview(serviceUrl) : `${window.location.hostname}:${health.port || window.location.port || "37631"}`);
     setDot(byId("service-dot"), ok ? "ok" : "danger");
     setDot(byId("service-state-dot"), ok ? "ok" : "danger");
@@ -510,6 +515,7 @@ async function trustLocalCertificate() {
   const confirmed = window.confirm("安装本地信任证书后，当前系统用户的浏览器会信任本机生成的 code 服务证书。证书私钥只保存在本机，不会打包发布或共享。是否继续？");
   if (!confirmed) return;
 
+  let installed = false;
   if (button && "disabled" in button) button.disabled = true;
   try {
     const data = await fetchJson("/api/certificate/trust", {
@@ -518,12 +524,23 @@ async function trustLocalCertificate() {
         "x-code-management-action": "trust-local-ca"
       }
     });
-    showToast(data.message || "本地信任证书已安装");
+    installed = Boolean(data.trusted);
+    showToast(installed ? `${data.message || "本地信任证书已安装"}，正在重新加载页面` : data.message || "本地信任证书安装未完成");
+    await refreshHealth();
+    if (installed) {
+      setTrustCertificateStatus("本机已信任", "当前用户已信任 code 本地开发 CA。浏览器重新加载后会重新校验证书。");
+      if (button && "disabled" in button) button.disabled = true;
+      window.setTimeout(() => {
+        if (window.location && typeof window.location.reload === "function") {
+          window.location.reload();
+        }
+      }, 800);
+    }
     await refreshAuditLogs();
   } catch (error) {
     showToast(error instanceof Error ? error.message : "本地信任证书安装失败");
   } finally {
-    if (button && "disabled" in button) button.disabled = !latestCaFingerprint || !isLocalTrustHostname();
+    if (button && "disabled" in button) button.disabled = installed || !latestCaFingerprint || !isLocalTrustHostname();
   }
 }
 

@@ -117,6 +117,11 @@ function isLocalManagementRequest(request: FastifyRequest): boolean {
   return isLoopbackAddress(request.ip) && isLoopbackManagementHost(request.headers.host);
 }
 
+function sslVerificationHostname(hostHeader: string | string[] | undefined): string {
+  const hostname = hostnameFromHostHeader(hostHeader);
+  return hostname.length > 0 ? hostname : "localhost";
+}
+
 function listMediaAssetsForWeb(context: AppContext, query: string) {
   const rows = context.repositories.mediaAssets.listForManagement(query);
   const assets = rows.map((asset) => ({
@@ -195,6 +200,10 @@ export async function createServer(context: AppContext = createAppContext(), opt
       hostname: request.hostname,
       port: context.config.port
     });
+    const certificateTrustStatus = await context.certificateTrust.checkLocalCertificateTrust({
+      serverCertPath: context.transport.certPath,
+      hostname: sslVerificationHostname(request.headers.host)
+    });
     return {
       ok: true,
       product: "code",
@@ -210,12 +219,14 @@ export async function createServer(context: AppContext = createAppContext(), opt
         bindHost: context.config.host,
         hostHeader: request.headers.host,
         hostname: request.hostname,
-        port: context.config.port
+        port: context.config.port,
+        localHostname: context.localMacName
       }),
       tlsFingerprint: context.transport.fingerprint,
       tlsPublicKeyHash: context.transport.publicKeyHash,
       certificateMode: context.transport.mode,
       caFingerprint: context.transport.caFingerprint,
+      certificateTrustStatus,
       certificateSubjectAltNames: context.transport.subjectAltNames
     };
   });

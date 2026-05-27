@@ -5,6 +5,7 @@ import { X509Certificate } from "node:crypto";
 import forge from "node-forge";
 import { describe, expect, it } from "vitest";
 import { collectDefaultTransportSubjectAltNames, ensureTransportCertificate } from "../security/transport.js";
+import { createAppContext } from "../appContext.js";
 
 describe("transport security", () => {
   it("creates a reusable certificate fingerprint for WSS pinning", () => {
@@ -95,6 +96,79 @@ describe("transport security", () => {
     expect(second.fingerprint).not.toBe(first.fingerprint);
     expect(second.publicKeyHash).toBe(first.publicKeyHash);
     expect(second.subjectAltNames.ipAddresses).toContain("192.168.1.24");
+  });
+
+  it("refreshes runtime transport certificate SANs after the LAN IP changes without changing the SPKI pin", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "code-transport-runtime-san-"));
+    let currentIp = "192.168.43.6";
+    const context = createAppContext({
+      host: "0.0.0.0",
+      port: 37631,
+      dataDir: dir,
+      codexBin: undefined,
+      codexIpcSocketPath: path.join(dir, "missing-codex-ipc.sock"),
+      projectRoots: [],
+      launchAgentDir: path.join(dir, "LaunchAgents"),
+      startupCommand: "pnpm dev"
+    }, {
+      collectTransportSubjectAltNames: () => ({
+        dnsNames: ["localhost", "macbook.local"],
+        ipAddresses: ["127.0.0.1", "::1", currentIp]
+      })
+    });
+
+    const firstFingerprint = context.transport.fingerprint;
+    const firstPublicKeyHash = context.transport.publicKeyHash;
+    expect(context.transport.subjectAltNames.ipAddresses).toContain("192.168.43.6");
+
+    currentIp = "192.168.2.27";
+    const refresh = context.refreshTransportCertificate();
+
+    expect(refresh.changed).toBe(true);
+    expect(context.transport.fingerprint).not.toBe(firstFingerprint);
+    expect(context.transport.publicKeyHash).toBe(firstPublicKeyHash);
+    expect(context.transport.subjectAltNames.ipAddresses).toContain("192.168.2.27");
+    expect(context.transport.subjectAltNames.ipAddresses).not.toContain("192.168.43.6");
+    const serverCert = new X509Certificate(fs.readFileSync(context.transport.certPath, "utf8"));
+    expect(serverCert.subjectAltName).toContain("IP Address:192.168.2.27");
+  });
+
+  it("does not churn the runtime certificate for volatile local hostnames", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "code-transport-runtime-hostname-"));
+    let currentHost = "macbook-air-1000.local";
+    let currentIp = "192.168.2.27";
+    const context = createAppContext({
+      host: "0.0.0.0",
+      port: 37631,
+      dataDir: dir,
+      codexBin: undefined,
+      codexIpcSocketPath: path.join(dir, "missing-codex-ipc.sock"),
+      projectRoots: [],
+      launchAgentDir: path.join(dir, "LaunchAgents"),
+      startupCommand: "pnpm dev"
+    }, {
+      collectTransportSubjectAltNames: () => ({
+        dnsNames: ["localhost", currentHost],
+        ipAddresses: ["127.0.0.1", "::1", currentIp]
+      })
+    });
+
+    const firstFingerprint = context.transport.fingerprint;
+
+    currentHost = "macbook-air-1001.local";
+    const hostnameOnlyRefresh = context.refreshTransportCertificate();
+
+    expect(hostnameOnlyRefresh.changed).toBe(false);
+    expect(context.transport.fingerprint).toBe(firstFingerprint);
+    expect(context.transport.subjectAltNames.dnsNames).toContain("macbook-air-1000.local");
+    expect(context.transport.subjectAltNames.dnsNames).not.toContain("macbook-air-1001.local");
+
+    currentIp = "192.168.2.28";
+    const ipRefresh = context.refreshTransportCertificate();
+
+    expect(ipRefresh.changed).toBe(true);
+    expect(context.transport.subjectAltNames.ipAddresses).toContain("192.168.2.28");
+    expect(context.transport.subjectAltNames.dnsNames).toContain("macbook-air-1000.local");
   });
 
   it("replaces an existing local CA when the private key no longer matches the CA certificate", () => {
