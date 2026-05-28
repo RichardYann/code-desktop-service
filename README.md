@@ -6,6 +6,13 @@
 
 The service directory is still named `mac-service` for historical reasons. The current codebase includes a desktop platform layer for macOS and Windows.
 
+## Public Documents
+
+- Privacy Policy: <https://lyz1022.github.io/code-desktop-service/privacy-policy-zh.html>
+- English Privacy Policy: <https://lyz1022.github.io/code-desktop-service/privacy-policy-en.html>
+- Desktop Service Setup Guide: <https://lyz1022.github.io/code-desktop-service/desktop-service-install-guide.html>
+- Releases: <https://github.com/lyz1022/code-desktop-service/releases>
+
 ## Features
 
 - Local HTTPS management console at `https://127.0.0.1:37631` by default.
@@ -58,6 +65,12 @@ corepack prepare pnpm@9.15.4 --activate
 ```
 
 ## Installation
+
+Latest release notes:
+
+```text
+https://github.com/lyz1022/code-desktop-service/releases
+```
 
 Clone the repository:
 
@@ -303,4 +316,3 @@ pnpm -r test
 
 - This repository does not include a license file yet. Add one before encouraging third-party reuse or redistribution.
 - The public repository contains service-side source only. It intentionally does not include the mobile app.
-

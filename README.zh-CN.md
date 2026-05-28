@@ -6,6 +6,13 @@
 
 当前服务目录仍然沿用历史名称 `mac-service`。实际代码已经包含 macOS 和 Windows 的桌面平台适配层。
 
+## 公开文档
+
+- 隐私政策：<https://lyz1022.github.io/code-desktop-service/privacy-policy-zh.html>
+- English Privacy Policy：<https://lyz1022.github.io/code-desktop-service/privacy-policy-en.html>
+- 桌面服务安装与配对说明：<https://lyz1022.github.io/code-desktop-service/desktop-service-install-guide.html>
+- GitHub Releases：<https://github.com/lyz1022/code-desktop-service/releases>
+
 ## 功能
 
 - 默认在 `https://127.0.0.1:37631` 提供本地 HTTPS 管理页。
@@ -58,6 +65,12 @@ corepack prepare pnpm@9.15.4 --activate
 ```
 
 ## 安装步骤
+
+最新 Release 说明：
+
+```text
+https://github.com/lyz1022/code-desktop-service/releases
+```
 
 克隆仓库：
 
@@ -303,4 +316,3 @@ pnpm -r test
 
 - 本仓库目前尚未包含 license 文件。如准备让第三方复用或再分发，建议先补充明确 license。
 - 本公开仓库只包含服务端源码，不包含移动端应用源码。
-
