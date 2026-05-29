@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createCodexSessionManager, mapCodexThreadToSessionSummary, normalizeCodexApproval, readCodexJsonlContextUsage, readCodexJsonlMessages, readCodexJsonlPendingApproval, readCodexJsonlPlanUpdates, type CodexThreadMetadata } from "../codex/codexSessionManager.js";
 
@@ -646,7 +648,7 @@ describe("codex session manager", () => {
       id: "thread-title",
       title: "test test test",
       preview: "这是一段最后回复摘要，不应该成为历史列表标题",
-      cwd: "/Users/lyz1022/Documents/Codex/2026-05-12/code-mobile-20260512-133019-test-test-test",
+      cwd: path.join(os.homedir(), "Documents", "Codex", "2026-05-12", "code-mobile-20260512-133019-test-test-test"),
       createdAt: 1778415573,
       updatedAt: 1778423484,
       status: { type: "notLoaded" }
@@ -665,7 +667,7 @@ describe("codex session manager", () => {
     const session = mapCodexThreadToSessionSummary({
       id: "thread-mobile-workspace",
       preview: "这是一段最后回复摘要，不应该成为历史列表标题",
-      cwd: "/Users/lyz1022/Documents/Codex/2026-05-12/code-mobile-20260512-133019-test-test-test",
+      cwd: path.join(os.homedir(), "Documents", "Codex", "2026-05-12", "code-mobile-20260512-133019-test-test-test"),
       createdAt: 1778415573,
       updatedAt: 1778423484,
       status: { type: "notLoaded" }
@@ -684,7 +686,7 @@ describe("codex session manager", () => {
     const session = mapCodexThreadToSessionSummary({
       id: "thread-conversation",
       preview: "创建语音生成技能",
-      cwd: "/Users/lyz1022/Documents/Codex/2026-05-09/skill-creator-users-lyz1022-codex-skills",
+      cwd: path.join(os.homedir(), "Documents", "Codex", "2026-05-09", "skill-creator-users-lyz1022-codex-skills"),
       createdAt: 1778415573,
       updatedAt: 1778423484,
       status: { type: "notLoaded" },
