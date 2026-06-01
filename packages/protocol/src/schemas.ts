@@ -287,6 +287,10 @@ export type TimelineItemKind = z.infer<typeof TimelineItemKindSchema>;
 export const TimelineItemStatusSchema = z.enum([
   "pending",
   "running",
+  "starting",
+  "streaming",
+  "inProgress",
+  "in_progress",
   "completed",
   "failed",
   "declined",
@@ -298,6 +302,7 @@ export const TimelineItemSchema = z.object({
   id: z.string().min(1),
   sessionId: z.string().min(1),
   turnId: z.string().min(1),
+  clientMessageId: z.string().min(1).nullable().optional(),
   kind: TimelineItemKindSchema,
   status: TimelineItemStatusSchema,
   title: z.string(),
@@ -447,6 +452,7 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("session.create"),
     requestId: z.string(),
+    clientMessageId: z.string().min(1).optional(),
     toolId: z.string(),
     projectPath: z.string().nullable(),
     text: z.string().min(1),
@@ -461,12 +467,18 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("session.sync.disable"), requestId: z.string(), sessionId: z.string() }),
   z.object({ type: z.literal("session.sync.unsubscribe"), requestId: z.string(), sessionId: z.string() }),
   z.object({ type: z.literal("session.rename"), requestId: z.string(), sessionId: z.string(), title: z.string().trim().min(1).max(120) }),
-  z.object({ type: z.literal("session.sendText"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string(), text: z.string().min(1), guidance: SessionInputGuidanceSchema.optional(), attachmentIds: z.array(z.string().min(1)).optional() }),
-  z.object({ type: z.literal("session.steer"), requestId: z.string(), sessionId: z.string(), text: z.string().min(1), guidance: SessionInputGuidanceSchema.optional() }),
+  z.object({ type: z.literal("session.sendText"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string().min(1), text: z.string().min(1), guidance: SessionInputGuidanceSchema.optional(), attachmentIds: z.array(z.string().min(1)).optional() }),
+  z.object({ type: z.literal("session.steer"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string().min(1), text: z.string().min(1), guidance: SessionInputGuidanceSchema.optional() }),
   z.object({ type: z.literal("session.context.compact"), requestId: z.string(), sessionId: z.string().min(1) }),
-  z.object({ type: z.literal("session.interrupt"), requestId: z.string(), sessionId: z.string() }),
-  z.object({ type: z.literal("session.withdrawPending"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string() }),
-  z.object({ type: z.literal("session.retryFailed"), requestId: z.string(), sessionId: z.string(), failedMessageId: z.string(), newClientMessageId: z.string(), text: z.string().min(1) }),
+  z.object({
+    type: z.literal("session.interrupt"),
+    requestId: z.string(),
+    sessionId: z.string(),
+    targetKind: z.enum(["turn", "startup"]).optional(),
+    turnId: z.string().min(1).optional()
+  }),
+  z.object({ type: z.literal("session.withdrawPending"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string().min(1) }),
+  z.object({ type: z.literal("session.retryFailed"), requestId: z.string(), sessionId: z.string(), failedMessageId: z.string().min(1), newClientMessageId: z.string().min(1), text: z.string().min(1) }),
   z.object({
     type: z.literal("session.inputQueue.enqueue"),
     requestId: z.string(),
@@ -479,6 +491,7 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("session.attachments.send"),
     requestId: z.string(),
     sessionId: z.string().min(1),
+    clientMessageId: z.string().min(1),
     attachmentIds: z.array(z.string().min(1))
   }),
   z.object({

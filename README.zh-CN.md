@@ -52,7 +52,8 @@
 
 ## 环境要求
 
-- 建议使用 Node.js 20 或更高版本。
+- Windows 推荐使用 Node.js 20 LTS 或 22 LTS。
+- Node.js 24 可能触发 `better-sqlite3` 原生依赖本地编译，需要额外安装 Visual Studio C++ Build Tools。
 - pnpm 9.15.4，版本以 `packageManager` 字段为准。
 - 本机需要可用的 Codex Desktop / App Server，或可被探测到的 Codex CLI binary。
 - macOS 功能最完整。Windows 已有桌面平台适配、数据目录、Codex binary 探测和证书信任安装能力，但部分自启动和捕获能力仍是 macOS-first。
@@ -78,6 +79,34 @@ https://github.com/lyz1022/code-desktop-service/releases
 git clone https://github.com/lyz1022/code-desktop-service.git
 cd code-desktop-service
 ```
+
+### Windows 快速安装
+
+Windows 上推荐在仓库根目录运行轻量 PowerShell 安装脚本。脚本会检查 Node.js、通过 Corepack 准备 pnpm、验证 Codex CLI/App Server binary、安装依赖、构建 `@code/mac-service`，并在数据目录下生成本地启动脚本。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-desktop-service.ps1
+```
+
+如果 Codex CLI 没有被自动发现，可显式传入 Codex Desktop 安装的二进制路径：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-desktop-service.ps1 -CodexBin "C:\Users\<you>\AppData\Local\OpenAI\Codex\bin\<version>\codex.exe"
+```
+
+如果希望安装后立即启动服务，可追加 `-Start`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-desktop-service.ps1 -CodexBin "C:\Users\<you>\AppData\Local\OpenAI\Codex\bin\<version>\codex.exe" -Start
+```
+
+默认 Windows 数据目录为 `C:\Users\<you>\Documents\Codex\code-data`，生成的启动脚本为：
+
+```text
+C:\Users\<you>\Documents\Codex\code-data\start-code-desktop-service.ps1
+```
+
+该脚本不会静默写入 Windows Root store，也不会注册自启动。证书信任仍需从本机 loopback 管理页手动安装；Windows 自启动和屏幕截图自动化当前仍未支持。
 
 安装依赖：
 
@@ -163,6 +192,8 @@ curl -k https://127.0.0.1:37631/api/health
 
 - macOS：`~/Library/Application Support/code`
 - Windows：`%APPDATA%\code` 或 `%LOCALAPPDATA%\code`
+
+轻量 Windows 安装脚本默认使用 `C:\Users\<you>\Documents\Codex\code-data`，除非显式传入 `-DataDir`。
 
 示例：
 

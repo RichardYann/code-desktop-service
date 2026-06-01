@@ -170,9 +170,23 @@ export function createAppContext(config: ServiceConfig = loadConfig(), options: 
     sessions: createSessionService(repositories),
     codex: {
       runPreflight: async () => {
+        const detectEnv = config.codexBin
+          ? { ...process.env, CODEX_BIN: config.codexBin }
+          : process.env;
+        const detected = await detectCodexCli({ env: detectEnv, candidates: codexCandidates, platform: platform.kind });
+        if (!detected.ok || !detected.appServerAvailable) {
+          return runCodexPreflight({
+            client: {
+              request: async () => {
+                throw new Error("Codex App Server client was not created because preflight is blocked");
+              }
+            },
+            detectCli: async () => detected
+          });
+        }
         return withCodexAppServerClientFromConfig(codexConnectionConfig, async (codexClient) => runCodexPreflight({
           client: codexClient,
-          detectCli: () => detectCodexCli({ candidates: codexCandidates })
+          detectCli: async () => detected
         }));
       },
       listModels: async () => {

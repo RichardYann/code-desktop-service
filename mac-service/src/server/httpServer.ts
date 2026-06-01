@@ -61,6 +61,7 @@ const StartupBodySchema = z.object({
 const ClearMediaAssetsBodySchema = z.object({
   assetIds: z.array(z.string().min(1)).min(1)
 });
+const PROJECT_ROOT_PICKER_UNSUPPORTED_MESSAGE = "当前平台不支持系统目录选择器，请手动输入项目根目录路径。";
 
 function isDeviceVisible(device: { expiresAt: string; revokedAt: string | null }): boolean {
   return device.revokedAt === null && Date.parse(device.expiresAt) > Date.now();
@@ -115,6 +116,11 @@ function isLoopbackManagementHost(hostHeader: string | string[] | undefined): bo
 
 function isLocalManagementRequest(request: FastifyRequest): boolean {
   return isLoopbackAddress(request.ip) && isLoopbackManagementHost(request.headers.host);
+}
+
+function isUnsupportedProjectRootPickerError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.includes("当前平台不支持访达目录选择器");
 }
 
 function sslVerificationHostname(hostHeader: string | string[] | undefined): string {
@@ -202,6 +208,8 @@ export async function createServer(context: AppContext = createAppContext(), opt
     });
     const certificateTrustStatus = await context.certificateTrust.checkLocalCertificateTrust({
       serverCertPath: context.transport.certPath,
+      caCertPath: context.transport.caCertPath,
+      caFingerprint: context.transport.caFingerprint,
       hostname: sslVerificationHostname(request.headers.host)
     });
     return {
@@ -350,6 +358,22 @@ export async function createServer(context: AppContext = createAppContext(), opt
       selectedPath = await chooseProjectRoot();
     } catch (error) {
       const message = error instanceof Error ? error.message : "无法打开访达目录选择器";
+      if (isUnsupportedProjectRootPickerError(error)) {
+        context.audit.record({
+          deviceId: null,
+          sessionId: null,
+          actionType: "projectRoots.choose",
+          result: "failed",
+          detail: PROJECT_ROOT_PICKER_UNSUPPORTED_MESSAGE
+        });
+        return {
+          ok: false,
+          cancelled: false,
+          unsupported: true,
+          message: PROJECT_ROOT_PICKER_UNSUPPORTED_MESSAGE,
+          roots: webProjectRoots(context)
+        };
+      }
       context.audit.record({
         deviceId: null,
         sessionId: null,

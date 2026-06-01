@@ -86,6 +86,19 @@ describe("codex app server client", () => {
     await expect(client.request("thread/list", {})).rejects.toThrow("Codex App Server request timed out: thread/list");
   });
 
+  it("rejects the request when transport send throws synchronously", async () => {
+    const client = createCodexAppServerClient({
+      send: () => {
+        throw new Error("write after end");
+      },
+      onMessage: () => undefined,
+      close: () => undefined
+    }, { requestTimeoutMs: 50 });
+
+    await expect(client.request("thread/list", { limit: 1 })).rejects.toThrow("write after end");
+    client.close();
+  });
+
   it("keeps long-running Codex requests pending past a normal model turn", async () => {
     vi.useFakeTimers();
     try {

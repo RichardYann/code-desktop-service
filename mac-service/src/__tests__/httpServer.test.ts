@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createTestAppContext } from "./helpers.js";
+import { createAppContext } from "../appContext.js";
 import { createServer } from "../server/httpServer.js";
 
 describe("http server", () => {
@@ -53,8 +54,42 @@ describe("http server", () => {
     });
     expect(checkLocalCertificateTrust).toHaveBeenCalledWith({
       serverCertPath: context.transport.certPath,
+      caCertPath: context.transport.caCertPath,
+      caFingerprint: context.transport.caFingerprint,
       hostname: "localhost"
     });
+  });
+
+  it("returns structured blocked Codex preflight when the configured binary is unavailable", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "code-preflight-missing-codex-"));
+    const context = createAppContext({
+      host: "127.0.0.1",
+      port: 0,
+      dataDir,
+      codexBin: path.join(dataDir, "missing-codex.exe"),
+      codexIpcSocketPath: path.join(dataDir, "missing-codex-ipc.sock"),
+      projectRoots: [],
+      launchAgentDir: path.join(dataDir, "LaunchAgents"),
+      startupCommand: "pnpm dev"
+    });
+    server = await createServer(context);
+
+    try {
+      const response = await server.inject({
+        method: "GET",
+        url: "/api/codex-preflight"
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        status: "blocked",
+        codexBin: null,
+        appServerAvailable: false
+      });
+      expect(response.body).toContain("CODEX_BIN");
+    } finally {
+      context.db.close();
+    }
   });
 
   it("prepares, uploads, and downloads an authorized asset", async () => {

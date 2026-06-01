@@ -6,13 +6,14 @@ import type {
 } from "./desktopPlatform.js";
 
 const STARTUP_LABEL = "Windows user Startup folder";
+const CODEX_COMMAND_CANDIDATES = ["codex.exe", "codex.cmd", "codex"];
 
 function cleanName(value: string | undefined): string {
   return (value ?? "").trim();
 }
 
 function windowsDataRoot(deps: DesktopPlatformDeps): string {
-  return cleanName(deps.env.APPDATA) || cleanName(deps.env.LOCALAPPDATA) || path.join(deps.homedir(), "AppData", "Roaming");
+  return cleanName(deps.env.APPDATA) || cleanName(deps.env.LOCALAPPDATA) || path.win32.join(deps.homedir(), "AppData", "Roaming");
 }
 
 function startupStatus(startupDir: string): DesktopStartupStatus {
@@ -28,8 +29,8 @@ function startupStatus(startupDir: string): DesktopStartupStatus {
 export function createWindowsPlatform(deps: DesktopPlatformDeps): DesktopPlatform {
   return {
     kind: "win32",
-    defaultDataDir: () => path.join(windowsDataRoot(deps), "code"),
-    defaultStartupDir: () => path.join(
+    defaultDataDir: () => path.win32.join(windowsDataRoot(deps), "code"),
+    defaultStartupDir: () => path.win32.join(
       windowsDataRoot(deps),
       "Microsoft",
       "Windows",
@@ -37,7 +38,7 @@ export function createWindowsPlatform(deps: DesktopPlatformDeps): DesktopPlatfor
       "Programs",
       "Startup"
     ),
-    defaultCodexBinaryCandidates: () => ["codex.exe", "codex.cmd", "codex"],
+    defaultCodexBinaryCandidates: () => [...CODEX_COMMAND_CANDIDATES],
     resolveDisplayName: () => cleanName(deps.env.COMPUTERNAME) || cleanName(deps.hostname()) || "Windows PC",
     createStartupService: (options) => ({
       status: async () => startupStatus(options.startupDir),

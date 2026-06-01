@@ -7,6 +7,61 @@ function isTimelineItemEvent(event: TimelineRuntimeEvent, kind: TimelineItemKind
 }
 
 describe("codex timeline runtime", () => {
+  it("preserves mobile client ids on live user items", () => {
+    const runtime = new CodexTimelineRuntime();
+    const started = runtime.applyNotification("item/started", {
+      threadId: "thread-client-id",
+      turnId: "turn-client-id",
+      item: {
+        id: "server-user-started",
+        type: "userMessage",
+        clientId: "client-started-1",
+        content: [{ type: "text", text: "开始" }]
+      }
+    });
+    const startedUser = started.find((event) => event.type === "timeline.item.started" && isTimelineItemEvent(event, "userMessage"));
+    expect(startedUser?.item.clientMessageId).toBe("client-started-1");
+
+    const completedOnlyRuntime = new CodexTimelineRuntime();
+    const completed = completedOnlyRuntime.applyNotification("item/completed", {
+      threadId: "thread-client-id",
+      turnId: "turn-client-id",
+      item: {
+        id: "server-user-completed",
+        type: "userMessage",
+        clientUserMessageId: "client-completed-1",
+        content: [{ type: "text", text: "完成" }]
+      }
+    });
+    const completedUser = completed.find((event) => event.type === "timeline.item.completed" && isTimelineItemEvent(event, "userMessage"));
+    expect(completedUser?.item.clientMessageId).toBe("client-completed-1");
+  });
+
+  it("inherits turn-level client ids for live user items when item payload omits them", () => {
+    const runtime = new CodexTimelineRuntime();
+    runtime.applyNotification("turn/started", {
+      threadId: "thread-client-id",
+      turn: {
+        id: "turn-client-id",
+        status: "inProgress",
+        clientUserMessageId: "client-turn-level-1"
+      }
+    });
+
+    const started = runtime.applyNotification("item/started", {
+      threadId: "thread-client-id",
+      turnId: "turn-client-id",
+      item: {
+        id: "server-user-started",
+        type: "userMessage",
+        content: [{ type: "text", text: "开始" }]
+      }
+    });
+
+    const startedUser = started.find((event) => event.type === "timeline.item.started" && isTimelineItemEvent(event, "userMessage"));
+    expect(startedUser?.item.clientMessageId).toBe("client-turn-level-1");
+  });
+
   it("aggregates live Codex notifications into rich timeline events", () => {
     const runtime = new CodexTimelineRuntime();
     const events = [
@@ -943,6 +998,46 @@ describe("codex timeline runtime", () => {
         isStreaming: false
       })
     });
+  });
+
+  it("keeps official imageGeneration started and completed events on one timeline owner", () => {
+    const runtime = new CodexTimelineRuntime();
+    runtime.applyNotification("item/started", {
+      threadId: "thread-image",
+      turnId: "turn-image",
+      item: {
+        id: "imagegen-call-1",
+        type: "imageGeneration",
+        status: "inProgress",
+        prompt: "画一只可爱的耶耶"
+      }
+    });
+
+    const completed = runtime.applyNotification("item/completed", {
+      threadId: "thread-image",
+      turnId: "turn-image",
+      item: {
+        id: "imagegen-call-1",
+        type: "imageGeneration",
+        status: "completed",
+        revisedPrompt: "一只可爱的萨摩耶幼犬",
+        assetIds: ["asset-image-1"],
+        savedPath: "/tmp/yeye.png"
+      }
+    });
+
+    const event = completed[0];
+    expect(event.type).toBe("timeline.item.completed");
+    if (event.type !== "timeline.item.completed") throw new Error("expected completed timeline item");
+    expect(event.item).toEqual(expect.objectContaining({
+      id: "imagegen-call-1",
+      kind: "imageGeneration",
+      status: "completed",
+      title: "imagegen",
+      text: "一只可爱的萨摩耶幼犬",
+      assetIds: ["asset-image-1"],
+      isStreaming: false
+    }));
   });
 
   it("preserves official turn itemsView and agent message phase in live runtime events", () => {

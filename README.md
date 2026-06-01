@@ -52,7 +52,8 @@ Not included in this repository:
 
 ## Requirements
 
-- Node.js 20 or newer is recommended.
+- Node.js 20 LTS or 22 LTS is recommended on Windows.
+- Node.js 24 may require Visual Studio C++ Build Tools because `better-sqlite3` can fall back to a native rebuild.
 - pnpm 9.15.4, as declared by `packageManager`.
 - A local Codex desktop/App Server installation or a reachable Codex CLI binary.
 - macOS for the most complete feature set. Windows support exists for the desktop platform layer, data directory, Codex binary discovery, and certificate trust installation, but some service-management features are still macOS-first.
@@ -78,6 +79,34 @@ Clone the repository:
 git clone https://github.com/lyz1022/code-desktop-service.git
 cd code-desktop-service
 ```
+
+### Windows Quick Setup
+
+On Windows, run the lightweight PowerShell setup script from the repository root. It checks Node.js, prepares pnpm through Corepack when needed, validates the Codex CLI/App Server binary, installs dependencies, builds `@code/mac-service`, and writes a local start script under the data directory.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-desktop-service.ps1
+```
+
+If Codex is not found automatically, pass the Codex CLI installed by Codex Desktop:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-desktop-service.ps1 -CodexBin "C:\Users\<you>\AppData\Local\OpenAI\Codex\bin\<version>\codex.exe"
+```
+
+To start the service immediately after setup, add `-Start`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-desktop-service.ps1 -CodexBin "C:\Users\<you>\AppData\Local\OpenAI\Codex\bin\<version>\codex.exe" -Start
+```
+
+The default Windows data directory is `C:\Users\<you>\Documents\Codex\code-data`. The generated start script is:
+
+```text
+C:\Users\<you>\Documents\Codex\code-data\start-code-desktop-service.ps1
+```
+
+This script does not silently install the local CA into the Windows Root store and does not register startup. Certificate trust is still installed from the loopback-only local management page, and Windows startup/capture automation remains unsupported in this phase.
 
 Install dependencies:
 
@@ -163,6 +192,8 @@ Platform default data directories:
 
 - macOS: `~/Library/Application Support/code`
 - Windows: `%APPDATA%\code` or `%LOCALAPPDATA%\code`
+
+The lightweight Windows setup script uses `C:\Users\<you>\Documents\Codex\code-data` unless `-DataDir` is supplied.
 
 Example:
 

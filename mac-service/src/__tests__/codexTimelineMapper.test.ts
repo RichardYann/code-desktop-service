@@ -110,6 +110,85 @@ describe("codex timeline mapper", () => {
     expect(turns[0].items[4].diff?.files[0].patch).toBe("diff --git a/codexTimelineMapper.ts b/codexTimelineMapper.ts");
   });
 
+  it("preserves canonical user client ids for mobile pending-message ownership", () => {
+    const turns = mapCodexThreadToTimeline({
+      turns: [
+        {
+          id: "turn-client-id",
+          status: "completed",
+          createdAt: 1778415573,
+          completedAt: 1778415588,
+          items: [
+            { id: "server-user-1", type: "userMessage", clientId: "client-message-1", content: [{ type: "text", text: "继续" }] }
+          ]
+        }
+      ]
+    }, "thread-1");
+
+    expect(turns[0].items[0]).toMatchObject({
+      id: "server-user-1",
+      kind: "userMessage",
+      text: "继续",
+      clientMessageId: "client-message-1"
+    });
+  });
+
+  it("maps canonical imageGeneration items as the image owner with asset ids", () => {
+    const turns = mapCodexThreadToTimeline({
+      turns: [
+        {
+          id: "turn-image",
+          status: "completed",
+          createdAt: 1778415573,
+          completedAt: 1778415588,
+          items: [
+            { id: "user-image", type: "userMessage", text: "画一只可爱的耶耶" },
+            {
+              id: "imagegen-call-1",
+              type: "imageGeneration",
+              status: "completed",
+              revisedPrompt: "一只可爱的萨摩耶幼犬",
+              assetIds: ["asset-image-1"]
+            }
+          ]
+        }
+      ]
+    }, "thread-image");
+
+    expect(turns[0].items[1]).toMatchObject({
+      id: "imagegen-call-1",
+      kind: "imageGeneration",
+      status: "completed",
+      title: "imagegen",
+      text: "一只可爱的萨摩耶幼犬",
+      assetIds: ["asset-image-1"]
+    });
+  });
+
+  it("inherits turn-level client user ids for canonical user items", () => {
+    const turns = mapCodexThreadToTimeline({
+      turns: [
+        {
+          id: "turn-client-id",
+          status: "completed",
+          clientUserMessageId: "client-message-turn-level",
+          createdAt: 1778415573,
+          completedAt: 1778415588,
+          items: [
+            { id: "server-user-1", type: "userMessage", content: [{ type: "text", text: "继续" }] }
+          ]
+        }
+      ]
+    }, "thread-1");
+
+    expect(turns[0].items[0]).toMatchObject({
+      id: "server-user-1",
+      kind: "userMessage",
+      text: "继续",
+      clientMessageId: "client-message-turn-level"
+    });
+  });
+
   it("surfaces Codex error item messages as failed timeline errors", () => {
     const turns = mapCodexThreadToTimeline({
       turns: [

@@ -18,6 +18,42 @@ title: 桌面服务安装与配对说明
 https://github.com/lyz1022/code-desktop-service
 ```
 
+## Windows 快速安装
+
+推荐在 Windows 上使用仓库内的轻量 PowerShell 脚本。它会检查 Node.js 20/22、准备 pnpm、验证 Codex CLI/App Server、安装依赖、构建桌面服务，并在数据目录下生成本地启动脚本。
+
+```powershell
+git clone https://github.com/lyz1022/code-desktop-service.git
+cd code-desktop-service
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-desktop-service.ps1
+```
+
+如果 Codex CLI 没有被自动发现，可显式传入 Codex Desktop 安装的二进制路径：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-desktop-service.ps1 -CodexBin "C:\Users\<you>\AppData\Local\OpenAI\Codex\bin\<version>\codex.exe"
+```
+
+如果希望安装后立即启动服务，可追加 `-Start`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-desktop-service.ps1 -CodexBin "C:\Users\<you>\AppData\Local\OpenAI\Codex\bin\<version>\codex.exe" -Start
+```
+
+脚本默认数据目录为：
+
+```text
+C:\Users\<you>\Documents\Codex\code-data
+```
+
+安装完成后会生成启动脚本：
+
+```text
+C:\Users\<you>\Documents\Codex\code-data\start-code-desktop-service.ps1
+```
+
+脚本不会静默写入 Windows Root store，也不会注册自启动。证书信任仍需在本机浏览器打开 `https://localhost:37631` 后，从管理页手动安装；Windows 自启动和屏幕截图自动化当前仍属于未支持能力。
+
 ## 推荐安装提示词
 
 用户可以在桌面端 Codex 中输入：

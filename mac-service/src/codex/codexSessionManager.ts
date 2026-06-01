@@ -25,13 +25,19 @@ export interface CreateCodexSessionInput {
   text: string;
   inputItems?: CodexTurnInputItem[];
   runtimeConfig?: SessionRuntimeConfigInput;
+  clientUserMessageId?: string;
+}
+
+export interface CreateCodexThreadInput {
+  projectPath: string | null;
+  text: string;
 }
 
 export type CodexTurnInputSource =
-  | { text: string; inputItems?: CodexTurnInputItem[] }
-  | { text?: string; inputItems: CodexTurnInputItem[] };
+  | { text: string; inputItems?: CodexTurnInputItem[]; clientUserMessageId?: string }
+  | { text?: string; inputItems: CodexTurnInputItem[]; clientUserMessageId?: string };
 
-export type StartTurnInput = { threadId: string } & CodexTurnInputSource;
+export type StartTurnInput = { threadId: string; skipPreflightResume?: boolean } & CodexTurnInputSource;
 
 export type SteerTurnInput = { threadId: string; turnId: string } & CodexTurnInputSource;
 
@@ -372,7 +378,7 @@ function mapCodexTurnsToMessages(thread: Record<string, unknown>, sessionId: str
   for (let turnIndex = 0; turnIndex < turns.length; turnIndex++) {
     const turn = asRecord(turns[turnIndex]);
     const turnId = stringOrNull(turn.id) ?? stringOrNull(turn.turnId) ?? `turn-${turnIndex + 1}`;
-    const createdAt = unixSecondsToIso(turn.createdAt, new Date().toISOString());
+    const createdAt = unixSecondsToIso(turn.createdAt ?? turn.startedAt ?? turn.turnStartedAtMs, new Date().toISOString());
     const items = asArray(turn.items);
     for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
       const message = messageFromCodexItem({
@@ -1202,19 +1208,23 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
     if (metadata?.cwd) resumeParams.cwd = metadata.cwd;
     if (metadata?.rolloutPath) resumeParams.path = metadata.rolloutPath;
     const params: Record<string, unknown> = { threadId: input.threadId, input: inputItemsFromTextOrItems(input) };
+    if (input.clientUserMessageId && input.clientUserMessageId.length > 0) params.clientUserMessageId = input.clientUserMessageId;
     if (metadata?.cwd) params.cwd = metadata.cwd;
     let turnResponse: Record<string, unknown>;
     const resumeThread = () => withCodexStage("thread/resume", () => client.request("thread/resume", resumeParams));
     const startThreadTurn = () => withCodexStage("turn/start", () => requestTurnStartWithRuntimeConfig(params, input.threadId));
+    const shouldResumeBeforeStart = input.skipPreflightResume !== true;
     try {
-      try {
-        await resumeThread();
-      } catch (error) {
-        if (!isThreadNotFoundError(error)) throw error;
+      if (shouldResumeBeforeStart) {
+        try {
+          await resumeThread();
+        } catch (error) {
+          if (!isThreadNotFoundError(error)) throw error;
+        }
       }
       turnResponse = asRecord(await startThreadTurn());
     } catch (error) {
-      if (!isThreadNotFoundError(error)) throw error;
+      if (!isThreadNotFoundError(error) || !shouldResumeBeforeStart) throw error;
       await resumeThread();
       turnResponse = asRecord(await startThreadTurn());
     }
@@ -1236,14 +1246,28 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
     throw new Error("审批调整说明发送失败");
   };
 
+  const createThread = async (input: CreateCodexThreadInput): Promise<{ threadId: string }> => {
+    const threadResponse = asRecord(await client.request("thread/start", {
+      cwd: createSessionCwd({ projectPath: input.projectPath, text: input.text }, options),
+      sessionStartSource: "startup",
+      threadSource: "user"
+    }));
+    const thread = asRecord(threadResponse.thread ?? threadResponse);
+    return { threadId: String(thread.id ?? thread.threadId) };
+  };
+
   return {
+    async createThread(input: CreateCodexThreadInput) {
+      return createThread(input);
+    },
+
     async createSession(input: CreateCodexSessionInput) {
-      const threadResponse = asRecord(await client.request("thread/start", { cwd: createSessionCwd(input, options), sessionStartSource: "startup", threadSource: "user" }));
-      const thread = asRecord(threadResponse.thread ?? threadResponse);
-      const threadId = String(thread.id ?? thread.threadId);
+      const createdThread = await createThread({ projectPath: input.projectPath, text: input.text });
+      const threadId = createdThread.threadId;
       const turnResponse = asRecord(await requestTurnStartWithRuntimeConfig({
         threadId,
-        input: inputItemsFromTextOrItems(input)
+        input: inputItemsFromTextOrItems(input),
+        ...(input.clientUserMessageId && input.clientUserMessageId.length > 0 ? { clientUserMessageId: input.clientUserMessageId } : {})
       }, threadId, input.runtimeConfig));
       const turn = asRecord(turnResponse.turn ?? turnResponse);
       return { threadId, turnId: String(turn.id ?? turn.turnId), status: normalizeTurnStatus(turn.status) };
@@ -1334,6 +1358,7 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
     async steerTurn(input: SteerTurnInput) {
       return client.request("turn/steer", {
         threadId: input.threadId,
+        ...(input.clientUserMessageId && input.clientUserMessageId.length > 0 ? { clientUserMessageId: input.clientUserMessageId } : {}),
         expectedTurnId: input.turnId,
         input: inputItemsFromTextOrItems(input)
       });

@@ -61,6 +61,7 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("session.create"),
     requestId: z.string(),
+    clientMessageId: z.string().min(1).optional(),
     toolId: z.string(),
     projectPath: z.string().nullable(),
     text: z.string().min(1),
@@ -75,11 +76,11 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("session.sync.disable"), requestId: z.string(), sessionId: z.string() }),
   z.object({ type: z.literal("session.sync.unsubscribe"), requestId: z.string(), sessionId: z.string() }),
   z.object({ type: z.literal("session.rename"), requestId: z.string(), sessionId: z.string(), title: z.string().trim().min(1).max(120) }),
-  z.object({ type: z.literal("session.sendText"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string(), text: z.string().min(1), guidance: SessionInputGuidanceSchema.optional(), attachmentIds: z.array(z.string().min(1)).optional() }),
-  z.object({ type: z.literal("session.steer"), requestId: z.string(), sessionId: z.string(), text: z.string().min(1), guidance: SessionInputGuidanceSchema.optional() }),
+  z.object({ type: z.literal("session.sendText"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string().min(1), text: z.string().min(1), guidance: SessionInputGuidanceSchema.optional(), attachmentIds: z.array(z.string().min(1)).optional() }),
+  z.object({ type: z.literal("session.steer"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string().min(1), text: z.string().min(1), guidance: SessionInputGuidanceSchema.optional() }),
   z.object({ type: z.literal("session.context.compact"), requestId: z.string(), sessionId: z.string().min(1) }),
-  z.object({ type: z.literal("session.inputQueue.enqueue"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string(), text: z.string().min(1), guidance: SessionInputGuidanceSchema }).strict(),
-  z.object({ type: z.literal("session.attachments.send"), requestId: z.string(), sessionId: z.string().min(1), attachmentIds: z.array(z.string().min(1)) }),
+  z.object({ type: z.literal("session.inputQueue.enqueue"), requestId: z.string(), sessionId: z.string(), clientMessageId: z.string().min(1), text: z.string().min(1), guidance: SessionInputGuidanceSchema }).strict(),
+  z.object({ type: z.literal("session.attachments.send"), requestId: z.string(), sessionId: z.string().min(1), clientMessageId: z.string().min(1), attachmentIds: z.array(z.string().min(1)) }),
   z.object({ type: z.literal("session.inputQueue.cancel"), requestId: z.string(), sessionId: z.string(), queueItemId: z.string().min(1) }),
   z.object({ type: z.literal("session.inputQueue.retry"), requestId: z.string(), sessionId: z.string(), queueItemId: z.string().min(1) }),
   z.object({ type: z.literal("localWeb.open"), requestId: z.string(), sessionId: z.string().min(1), targetUrl: z.string().url() }),
@@ -92,7 +93,7 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     localWebSessionId: z.string().min(1).nullable(),
     userConfirmed: z.boolean()
   }),
-  z.object({ type: z.literal("session.interrupt"), requestId: z.string(), sessionId: z.string() }),
+  z.object({ type: z.literal("session.interrupt"), requestId: z.string(), sessionId: z.string(), targetKind: z.enum(["turn", "startup"]).optional(), turnId: z.string().min(1).optional() }),
   z.object({ type: z.literal("session.pin"), requestId: z.string(), sessionId: z.string(), isPinned: z.boolean() }),
   z.object({ type: z.literal("approval.respond"), requestId: z.string(), sessionId: z.string(), approvalId: z.string(), actionId: z.string(), answers: ApprovalAnswersSchema.optional() }),
   z.object({ type: z.literal("dev.approvalFixture.show"), requestId: z.string(), sessionId: z.string(), kind: DevApprovalFixtureKindSchema }),
@@ -423,9 +424,10 @@ const commandAuditDetails: Record<ClientCommand["type"], { success: string; fail
 };
 
 export interface CommandRouterSessions {
-  createSession(input: { projectPath: string | null; text: string; inputItems?: CodexTurnInputItem[]; runtimeConfig?: SessionRuntimeConfigInput }): Promise<{ threadId: string; turnId: string; status: string }>;
+  createThread?(input: { projectPath: string | null; text: string }): Promise<{ threadId: string }>;
+  createSession(input: { projectPath: string | null; text: string; inputItems?: CodexTurnInputItem[]; runtimeConfig?: SessionRuntimeConfigInput; clientUserMessageId?: string }): Promise<{ threadId: string; turnId: string; status: string }>;
   readSessionDetail(threadId: string): Promise<SessionDetail>;
-  startTurn(input: { threadId: string } & CodexTurnInputSource): Promise<unknown>;
+  startTurn(input: { threadId: string; skipPreflightResume?: boolean } & CodexTurnInputSource): Promise<unknown>;
   steerTurn(input: { threadId: string; turnId: string } & CodexTurnInputSource): Promise<unknown>;
   interruptTurn(input: { threadId: string; turnId: string }): Promise<unknown>;
   compactContext?(input: { threadId: string }): Promise<unknown>;
@@ -437,7 +439,7 @@ export interface CommandRouterSessions {
 }
 
 type CommandRouterResult =
-  | { kind: "session.created"; requestId: string; threadId: string; turnId: string; status: string; projectPath: string | null; text: string; attachmentIds?: string[]; attachments?: StoredSessionAttachment[] }
+  | { kind: "session.created"; requestId: string; clientMessageId?: string; threadId: string; turnId?: string; status: string; projectPath: string | null; text: string; attachmentIds?: string[]; attachments?: StoredSessionAttachment[] }
   | { kind: "session.detail"; requestId: string; detail: SessionDetail }
   | { kind: "session.sync.enabled"; requestId: string; detail: SessionDetail; activeDetail: boolean }
   | { kind: "session.sync.disabled"; requestId: string; sessionId: string }
@@ -465,12 +467,32 @@ type BackgroundCommandFailure = {
   message: string;
 };
 
-function readTurnId(value: unknown): string | null {
-  if (value !== null && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    if (typeof record.turnId === "string") return record.turnId;
+type BackgroundTurnStarted = {
+  sessionId: string;
+  turnId: string;
+  status: string;
+};
+
+function readStartedTurn(value: unknown): { turnId: string; status: string } | null {
+  const record = asRecord(value);
+  let turnRecord = record;
+  if (record.turn !== undefined) {
+    turnRecord = asRecord(record.turn);
   }
-  return null;
+  const turnId = stringField(turnRecord, "turnId") || stringField(turnRecord, "id");
+  if (turnId.length === 0) return null;
+  const status = statusLabelFromParams(turnRecord) || stringField(turnRecord, "status") || "running";
+  return { turnId, status };
+}
+
+function readTurnId(value: unknown): string | null {
+  return readStartedTurn(value)?.turnId ?? null;
+}
+
+function isIndeterminateCodexTurnRequestTimeout(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes("Codex App Server request timed out: turn/start") ||
+    error.message.includes("Codex App Server request timed out: turn/steer");
 }
 
 export function createCommandRouter(deps: {
@@ -527,6 +549,7 @@ export function createCommandRouter(deps: {
 
   async function buildTurnInputWithAttachments(input: {
     sessionId: string;
+    clientMessageId?: string;
     text: string;
     guidance?: z.infer<typeof SessionInputGuidanceSchema>;
     attachmentIds?: string[];
@@ -604,24 +627,47 @@ export function createCommandRouter(deps: {
   }
 
   function normalizeTurnInputSource(input: CodexTurnInputSource): CodexTurnInputSource {
+    const clientUserMessageId = input.clientUserMessageId && input.clientUserMessageId.length > 0 ? input.clientUserMessageId : undefined;
+    let normalized: CodexTurnInputSource;
     if (input.inputItems && input.inputItems.length > 0) {
-      return typeof input.text === "string" ? { text: input.text, inputItems: input.inputItems } : { inputItems: input.inputItems };
+      normalized = typeof input.text === "string" ? { text: input.text, inputItems: input.inputItems } : { inputItems: input.inputItems };
+    } else if (typeof input.text === "string" && input.text.length > 0) {
+      normalized = { text: input.text };
+    } else {
+      throw new Error("Codex turn input must include text or inputItems");
     }
-    if (typeof input.text === "string" && input.text.length > 0) {
-      return { text: input.text };
+    if (clientUserMessageId) {
+      return { ...normalized, clientUserMessageId };
     }
-    throw new Error("Codex turn input must include text or inputItems");
+    return normalized;
   }
 
-  async function startSessionTurn(sessionId: string, input: CodexTurnInputSource): Promise<void> {
+  async function startSessionTurn(
+    sessionId: string,
+    input: CodexTurnInputSource,
+    skipPreflightResume: boolean = false
+  ): Promise<BackgroundTurnStarted | null> {
     const previousTurnId = turnInputLifecycle.activeTurnId(sessionId);
+    const turnInput = normalizeTurnInputSource(input);
+    const startInput: { threadId: string; skipPreflightResume?: boolean } & CodexTurnInputSource = {
+      threadId: sessionId,
+      ...turnInput
+    };
+    if (skipPreflightResume) {
+      startInput.skipPreflightResume = true;
+    }
     turnInputLifecycle.noteTurnStartRequested(sessionId);
     try {
-      const started = await deps.sessions.startTurn({ threadId: sessionId, ...normalizeTurnInputSource(input) });
-      const startedTurnId = readTurnId(started);
-      if (startedTurnId) turnInputLifecycle.noteTurnStartedFromStartResponse(sessionId, startedTurnId, previousTurnId);
-      else turnInputLifecycle.noteTurnStartFailed(sessionId);
+      const started = await deps.sessions.startTurn(startInput);
+      const startedTurn = readStartedTurn(started);
+      if (startedTurn !== null) {
+        turnInputLifecycle.noteTurnStartedFromStartResponse(sessionId, startedTurn.turnId, previousTurnId);
+        return { sessionId, turnId: startedTurn.turnId, status: startedTurn.status };
+      }
+      turnInputLifecycle.noteTurnStartFailed(sessionId);
+      return null;
     } catch (error) {
+      if (isIndeterminateCodexTurnRequestTimeout(error)) return null;
       turnInputLifecycle.noteTurnStartFailed(sessionId);
       throw error;
     }
@@ -634,6 +680,7 @@ export function createCommandRouter(deps: {
         await deps.sessions.steerTurn({ threadId: input.sessionId, turnId: input.turnId, ...turnInput });
         return;
       } catch (error) {
+        if (isIndeterminateCodexTurnRequestTimeout(error)) return;
         if (!isMissingThreadOrTurnError(error)) throw error;
         turnInputLifecycle.noteActiveTurnMissing(input.sessionId);
       }
@@ -647,6 +694,7 @@ export function createCommandRouter(deps: {
       await deps.sessions.steerTurn({ threadId: input.sessionId, turnId: input.turnId, ...turnInput });
       return;
     } catch (error) {
+      if (isIndeterminateCodexTurnRequestTimeout(error)) return;
       const refreshedTurnId = activeTurnIdFromMismatchError(error);
       if (refreshedTurnId) {
         turnInputLifecycle.noteTurnStarted(input.sessionId, refreshedTurnId);
@@ -654,6 +702,7 @@ export function createCommandRouter(deps: {
           await deps.sessions.steerTurn({ threadId: input.sessionId, turnId: refreshedTurnId, ...turnInput });
           return;
         } catch (retryError) {
+          if (isIndeterminateCodexTurnRequestTimeout(retryError)) return;
           if (isMissingThreadOrTurnError(retryError)) turnInputLifecycle.noteActiveTurnMissing(input.sessionId);
           throw retryError;
         }
@@ -715,7 +764,8 @@ export function createCommandRouter(deps: {
     deps.runtimeConfig.saveCodexSessionConfig(sessionId, baseline, "codex-default-snapshot");
   }
 
-  async function activeTurnIdForInterrupt(sessionId: string): Promise<string | undefined> {
+  async function activeTurnIdForInterrupt(sessionId: string, preferredTurnId?: string): Promise<string | undefined> {
+    if (preferredTurnId && preferredTurnId.length > 0) return preferredTurnId;
     const currentTurnId = turnInputLifecycle.activeTurnId(sessionId);
     if (currentTurnId) return currentTurnId;
     const detail = await readSessionDetailForCommand(sessionId);
@@ -778,7 +828,11 @@ export function createCommandRouter(deps: {
       deps.sessions.forgetApprovalRequest?.(approvalId);
     },
 
-    async handle(command: ClientCommand, onBackgroundFailure?: (failure: BackgroundCommandFailure) => void): Promise<CommandRouterResult> {
+    async handle(
+      command: ClientCommand,
+      onBackgroundFailure?: (failure: BackgroundCommandFailure) => void,
+      onBackgroundTurnStarted?: (started: BackgroundTurnStarted) => void
+    ): Promise<CommandRouterResult> {
       if (command.type === "codex.installedCapabilities.list") {
         return { kind: "installed.capabilities", requestId: command.requestId, capabilities: deps.capabilities?.() ?? [] };
       }
@@ -901,15 +955,59 @@ export function createCommandRouter(deps: {
       if (command.type === "session.create") {
         const attachmentIds = command.attachmentIds ?? [];
         const createText = guidedText(command);
+        const clientUserMessageId = createClientMessageId(command);
         const draftAttachmentInput = await buildNewSessionDraftTurnInput({
           text: createText,
           attachmentIds
         });
+        if (deps.sessions.createThread) {
+          const createdThread = await deps.sessions.createThread({
+            projectPath: command.projectPath,
+            text: createText
+          });
+          let attachments: StoredSessionAttachment[] = [];
+          if (attachmentIds.length > 0) {
+            if (!deps.mediaAssets || !deps.sessionAttachments) {
+              throw new Error("附件服务不可用");
+            }
+            deps.mediaAssets.assignNewSessionDraftAssets(attachmentIds, createdThread.threadId);
+            attachments = storeAttachmentStatuses(createdThread.threadId, draftAttachmentInput.statuses);
+          }
+          if (command.runtimeConfig && deps.runtimeConfig) {
+            deps.runtimeConfig.update(createdThread.threadId, command.runtimeConfig);
+          }
+          const launch = async (): Promise<void> => {
+            const started = await startSessionTurn(createdThread.threadId, { inputItems: draftAttachmentInput.inputItems, clientUserMessageId }, true);
+            if (started !== null) {
+              onBackgroundTurnStarted?.(started);
+            }
+          };
+          void launch().catch((error) => {
+            onBackgroundFailure?.({
+              requestId: command.requestId,
+              sessionId: createdThread.threadId,
+              clientMessageId: createClientMessageId(command) ?? command.requestId,
+              message: error instanceof Error ? error.message : "Codex 指令发送失败"
+            });
+          });
+          return {
+            kind: "session.created",
+            requestId: command.requestId,
+            ...(clientUserMessageId ? { clientMessageId: clientUserMessageId } : {}),
+            threadId: createdThread.threadId,
+            status: "running",
+            projectPath: command.projectPath,
+            text: command.text,
+            ...(command.attachmentIds && command.attachmentIds.length > 0 ? { attachmentIds: command.attachmentIds } : {}),
+            ...(attachments.length > 0 ? { attachments } : {})
+          };
+        }
         const created = await deps.sessions.createSession({
           projectPath: command.projectPath,
           text: createText,
           inputItems: draftAttachmentInput.inputItems,
-          runtimeConfig: command.runtimeConfig
+          runtimeConfig: command.runtimeConfig,
+          clientUserMessageId
         });
         let attachments: StoredSessionAttachment[] = [];
         if (attachmentIds.length > 0) {
@@ -922,10 +1020,11 @@ export function createCommandRouter(deps: {
         if (command.runtimeConfig && deps.runtimeConfig) {
           deps.runtimeConfig.update(created.threadId, command.runtimeConfig);
         }
-        turnInputLifecycle.noteTurnStarted(created.threadId, created.turnId);
+        turnInputLifecycle.noteTurnStartedFromStartResponse(created.threadId, created.turnId, undefined);
         return {
           kind: "session.created",
           requestId: command.requestId,
+          ...(clientUserMessageId ? { clientMessageId: clientUserMessageId } : {}),
           threadId: created.threadId,
           turnId: created.turnId,
           status: created.status,
@@ -983,10 +1082,13 @@ export function createCommandRouter(deps: {
         const attachmentInput = await buildTurnInputWithAttachments(command);
         const launch = async (): Promise<void> => {
           if (shouldSteerNow) {
-            await steerActiveTurnWithExpectedRetry({ sessionId: command.sessionId, turnId: turnId!, inputItems: attachmentInput.inputItems });
+            await steerActiveTurnWithExpectedRetry({ sessionId: command.sessionId, turnId: turnId!, inputItems: attachmentInput.inputItems, clientUserMessageId: command.clientMessageId });
             return;
           }
-          await startSessionTurn(command.sessionId, { inputItems: attachmentInput.inputItems });
+          const started = await startSessionTurn(command.sessionId, { inputItems: attachmentInput.inputItems, clientUserMessageId: command.clientMessageId });
+          if (started !== null) {
+            onBackgroundTurnStarted?.(started);
+          }
         };
         void launch().catch((error) => {
           onBackgroundFailure?.({
@@ -1013,17 +1115,17 @@ export function createCommandRouter(deps: {
         if (!turnId) throw new Error("当前会话没有运行中的 Codex turn");
         const text = guidedText(command);
         const launch = async (): Promise<void> => {
-          await steerActiveTurnWithExpectedRetry({ sessionId: command.sessionId, turnId, text });
+          await steerActiveTurnWithExpectedRetry({ sessionId: command.sessionId, turnId, text, clientUserMessageId: command.clientMessageId });
         };
         void launch().catch((error) => {
           onBackgroundFailure?.({
             requestId: command.requestId,
             sessionId: command.sessionId,
-            clientMessageId: command.requestId,
+            clientMessageId: command.clientMessageId,
             message: error instanceof Error ? error.message : "Codex 指令发送失败"
           });
         });
-        return { kind: "message.received", requestId: command.requestId, sessionId: command.sessionId, messageId: command.requestId, text: command.text, sendState: "guided" };
+        return { kind: "message.received", requestId: command.requestId, sessionId: command.sessionId, messageId: command.clientMessageId, text: command.text, sendState: "guided" };
       }
 
       if (command.type === "session.context.compact") {
@@ -1062,17 +1164,18 @@ export function createCommandRouter(deps: {
         const turnId = turnInputLifecycle.activeTurnId(command.sessionId);
         const attachmentInput = await buildTurnInputWithAttachments({
           sessionId: command.sessionId,
+          clientMessageId: command.clientMessageId,
           text: "请查看这些附件。",
           attachmentIds: command.attachmentIds
         });
         const launch = async (): Promise<void> => {
-          await steerActiveTurnOrStart({ sessionId: command.sessionId, turnId, inputItems: attachmentInput.inputItems });
+          await steerActiveTurnOrStart({ sessionId: command.sessionId, turnId, inputItems: attachmentInput.inputItems, clientUserMessageId: command.clientMessageId });
         };
         void launch().catch((error) => {
           onBackgroundFailure?.({
             requestId: command.requestId,
             sessionId: command.sessionId,
-            clientMessageId: command.requestId,
+            clientMessageId: command.clientMessageId,
             message: error instanceof Error ? error.message : "Codex 指令发送失败"
           });
         });
@@ -1080,7 +1183,7 @@ export function createCommandRouter(deps: {
           kind: "message.received",
           requestId: command.requestId,
           sessionId: command.sessionId,
-          messageId: command.requestId,
+          messageId: command.clientMessageId,
           text: "请查看这些附件。",
           attachmentIds: command.attachmentIds,
           ...(attachmentInput.attachments.length > 0 ? { attachments: attachmentInput.attachments } : {}),
@@ -1148,7 +1251,11 @@ export function createCommandRouter(deps: {
       }
 
       if (command.type === "session.interrupt") {
-        const turnId = await activeTurnIdForInterrupt(command.sessionId);
+        if (command.targetKind === "startup") {
+          await deps.sessions.interruptTurn({ threadId: command.sessionId, turnId: "" });
+          return null;
+        }
+        const turnId = await activeTurnIdForInterrupt(command.sessionId, command.turnId);
         if (!turnId) throw new Error("当前会话没有可中断的 Codex turn");
         await deps.sessions.interruptTurn({ threadId: command.sessionId, turnId });
         turnInputLifecycle.markInterruptRequested(command.sessionId, turnId);
@@ -1325,6 +1432,7 @@ export function createFollowerAwareSessions(
   };
 
   return {
+    ...(localSessions.createThread ? { createThread: (input: { projectPath: string | null; text: string }) => localSessions.createThread!(input) } : {}),
     createSession: (input) => localSessions.createSession(input),
     async readSessionDetail(threadId: string): Promise<SessionDetail> {
       const desktopState = desktopStateForThread(desktopFollower, threadId);
@@ -1646,14 +1754,16 @@ function detailWithCodexImageArtifacts(
     const turnIndex = turnIndexForArtifact(turns, artifact.createdAt);
     if (turnIndex < 0) continue;
     const turn = turns[turnIndex];
-    const outputItem = codexImageOutputItem(turn, artifact.createdAt);
+    const outputItem = codexImageGenerationOutputItem(turn, artifact);
     if (outputItem) {
       outputItem.assetIds = [...(outputItem.assetIds ?? []), artifact.asset.id];
       if (safeTimeMs(artifact.createdAt) > safeTimeMs(outputItem.updatedAt)) {
         outputItem.updatedAt = artifact.createdAt;
       }
+      outputItem.status = "completed";
+      outputItem.isStreaming = false;
     } else {
-      turn.items.push(codexImageOutputTimelineItem(turn, artifact));
+      turn.items.push(codexImageGenerationTimelineItem(turn, artifact));
     }
     turn.items.sort((left, right) => safeTimeMs(left.createdAt) - safeTimeMs(right.createdAt));
   }
@@ -1796,28 +1906,64 @@ function turnIndexForArtifact(turns: SessionTurn[], createdAt: string): number {
   return fallbackIndex;
 }
 
-function codexImageOutputItem(turn: SessionTurn, createdAt: string): TimelineItem | null {
-  const createdAtMs = safeTimeMs(createdAt);
-  let fallback: TimelineItem | null = null;
-  for (let index = turn.items.length - 1; index >= 0; index--) {
-    const item = turn.items[index];
-    if (item.kind !== "agentMessage" || item.title === "mobile-process-only") continue;
-    if (fallback === null) fallback = item;
-    if (safeTimeMs(item.createdAt) <= createdAtMs + 2000) {
-      return item;
-    }
-  }
-  return fallback;
+function codexImageGenerationOutputItem(turn: SessionTurn, artifact: CodexGeneratedImageArtifact): TimelineItem | null {
+  const exact = codexImageGenerationItemByCallId(turn, artifact.callId);
+  if (exact) return exact;
+  return codexImageGenerationItemByTime(turn, artifact.createdAt);
 }
 
-function codexImageOutputTimelineItem(turn: SessionTurn, artifact: CodexGeneratedImageArtifact): TimelineItem {
+function codexImageGenerationItemByCallId(turn: SessionTurn, callId: string): TimelineItem | null {
+  if (callId.length === 0) return null;
+  for (const item of turn.items) {
+    if (item.kind === "imageGeneration" && item.id === callId) return item;
+  }
+  return null;
+}
+
+function codexImageGenerationItemByTime(turn: SessionTurn, createdAt: string): TimelineItem | null {
+  const createdAtMs = safeTimeMs(createdAt);
+  let bestRunningByTime: TimelineItem | null = null;
+  let bestRunningDelta = Number.POSITIVE_INFINITY;
+  let bestAnyByTime: TimelineItem | null = null;
+  let bestAnyDelta = Number.POSITIVE_INFINITY;
+  let latestRunning: TimelineItem | null = null;
+  let latestRunningMs = Number.NEGATIVE_INFINITY;
+  let latestAny: TimelineItem | null = null;
+  let latestAnyMs = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < turn.items.length; index++) {
+    const item = turn.items[index];
+    if (item.kind !== "imageGeneration") continue;
+    const itemCreatedAtMs = safeTimeMs(item.createdAt);
+    if (itemCreatedAtMs >= latestAnyMs) {
+      latestAny = item;
+      latestAnyMs = itemCreatedAtMs;
+    }
+    const isRunningOwner = item.status === "running" || item.isStreaming;
+    if (isRunningOwner && itemCreatedAtMs >= latestRunningMs) {
+      latestRunning = item;
+      latestRunningMs = itemCreatedAtMs;
+    }
+    const delta = Math.abs(itemCreatedAtMs - createdAtMs);
+    if (delta <= 2000 && isRunningOwner && delta <= bestRunningDelta) {
+      bestRunningByTime = item;
+      bestRunningDelta = delta;
+    }
+    if (delta <= 2000 && delta <= bestAnyDelta) {
+      bestAnyByTime = item;
+      bestAnyDelta = delta;
+    }
+  }
+  return bestRunningByTime ?? bestAnyByTime ?? latestRunning ?? latestAny;
+}
+
+function codexImageGenerationTimelineItem(turn: SessionTurn, artifact: CodexGeneratedImageArtifact): TimelineItem {
   return {
-    id: `${artifact.asset.id}:image-output`,
+    id: artifact.callId.length > 0 ? artifact.callId : `${artifact.asset.id}:image-generation`,
     sessionId: artifact.asset.sessionId,
     turnId: turn.id,
-    kind: "agentMessage",
+    kind: "imageGeneration",
     status: "completed",
-    title: "codex-image-output",
+    title: "imagegen",
     text: "",
     rawText: "",
     createdAt: artifact.createdAt,
@@ -1838,13 +1984,21 @@ function safeTimeMs(value: string): number {
 }
 
 function clientMessageIdForCommand(command: ClientCommand): string | undefined {
-  if (command.type === "session.sendText" || command.type === "session.inputQueue.enqueue") {
+  if (command.type === "session.create") {
+    return createClientMessageId(command);
+  }
+  if (command.type === "session.sendText" || command.type === "session.inputQueue.enqueue" ||
+    command.type === "session.attachments.send") {
     return command.clientMessageId;
   }
   if (command.type === "session.steer") {
-    return command.requestId;
+    return command.clientMessageId;
   }
   return undefined;
+}
+
+function createClientMessageId(command: Extract<ClientCommand, { type: "session.create" }>): string | undefined {
+  return command.clientMessageId && command.clientMessageId.length > 0 ? command.clientMessageId : undefined;
 }
 
 function syncRouterWithSessionDetail(router: ReturnType<typeof createCommandRouter>, detail: SessionDetail): void {
@@ -2083,6 +2237,18 @@ async function handleClientMessage(
       };
       send(socket, failureEvent);
       recordCommandAudit({ context, deviceId, command: parsed.data, rawCommand, result: "failed", routerResult: null, failureMessage: failure.message });
+    }, (started) => {
+      const event = {
+        type: "turn.status.updated",
+        sessionId: started.sessionId,
+        turnId: started.turnId,
+        status: started.status
+      };
+      const senderReceivesBroadcast = subscriber.syncedSessionIds.has(started.sessionId);
+      broadcastSharedRuntimeEvent(state, event);
+      if (!senderReceivesBroadcast) {
+        send(socket, event);
+      }
     });
     recordCommandAudit({ context, deviceId, command: parsed.data, rawCommand, result: "success", routerResult: result });
     if (!result) return;
@@ -2107,8 +2273,10 @@ async function handleClientMessage(
       subscriber.syncedSessionIds.add(result.threadId);
       subscriber.activeDetailSessionId = result.threadId;
       send(socket, { type: "session.updated", requestId: result.requestId, session });
-      send(socket, { type: "turn.status.updated", sessionId: result.threadId, turnId: result.turnId, status: "running" });
-      sendReceivedMessage(socket, { messageId: result.requestId, sessionId: result.threadId, text: result.text, assetIds: result.attachmentIds });
+      if (result.turnId) {
+        send(socket, { type: "turn.status.updated", sessionId: result.threadId, turnId: result.turnId, status: "running" });
+      }
+      sendReceivedMessage(socket, { messageId: result.clientMessageId ?? result.requestId, sessionId: result.threadId, text: result.text, assetIds: result.attachmentIds });
       if (result.attachments && result.attachments.length > 0) {
         send(socket, { type: "session.assets.updated", sessionId: result.threadId, assets: context.mediaAssets.listSessionAssets(result.threadId) });
         send(socket, { type: "session.attachments.updated", sessionId: result.threadId, attachments: result.attachments });
@@ -2509,6 +2677,7 @@ function createCoalescedDetailReadSessions(
   state: SharedCodexRuntimeState
 ): CommandRouterSessions {
   const wrapped: CommandRouterSessions = {
+    ...(sessions.createThread ? { createThread: (input: { projectPath: string | null; text: string }) => sessions.createThread!(input) } : {}),
     createSession: (input) => {
       return sessions.createSession(input);
     },
@@ -2958,20 +3127,26 @@ async function startNextQueuedInput(input: {
     items: input.context.inputQueue.list(input.sessionId)
   });
 
+  let startedTurnToBroadcast: { turnId: string; status: string } | null = null;
   try {
     const previousTurnId = input.router.activeTurnId(input.sessionId);
     input.router.noteTurnStartRequested(input.sessionId);
     const started = await input.sessions.startTurn({
       threadId: input.sessionId,
+      clientUserMessageId: item.clientMessageId,
       text: buildGuidedInput({
         text: item.text,
         guidance: item.guidance,
         capabilities: listInstalledCodexCapabilities()
       })
     });
-    const startedTurnId = readTurnId(started);
-    if (startedTurnId) input.router.noteTurnStartedFromStartResponse(input.sessionId, startedTurnId, previousTurnId);
-    else input.router.noteTurnStartFailed(input.sessionId);
+    const startedTurn = readStartedTurn(started);
+    if (startedTurn !== null) {
+      input.router.noteTurnStartedFromStartResponse(input.sessionId, startedTurn.turnId, previousTurnId);
+      startedTurnToBroadcast = startedTurn;
+    } else {
+      input.router.noteTurnStartFailed(input.sessionId);
+    }
     input.context.inputQueue.markSent(input.sessionId, item.id);
     input.context.audit.record({
       deviceId: null,
@@ -2980,7 +3155,17 @@ async function startNextQueuedInput(input: {
       result: "success",
       detail: `队列输入已自动发送，queueItemId=${item.id}，textLength=${item.textLength}，mode=${item.guidance.mode}，selectedCapabilityCount=${item.guidance.selectedCapabilityIds.length}`
     });
-  } catch {
+  } catch (error) {
+    if (isIndeterminateCodexTurnRequestTimeout(error)) {
+      input.context.inputQueue.markSent(input.sessionId, item.id);
+      input.context.audit.record({
+        deviceId: null,
+        sessionId: input.sessionId,
+        actionType: "session.inputQueue.autoSend",
+        result: "success",
+        detail: `队列输入已交给 Codex 继续执行，queueItemId=${item.id}，textLength=${item.textLength}，mode=${item.guidance.mode}，selectedCapabilityCount=${item.guidance.selectedCapabilityIds.length}`
+      });
+    } else {
     input.router.noteTurnStartFailed(input.sessionId);
     input.context.inputQueue.markFailed(input.sessionId, item.id);
     input.context.audit.record({
@@ -2990,6 +3175,7 @@ async function startNextQueuedInput(input: {
       result: "failed",
       detail: `队列输入自动发送失败，queueItemId=${item.id}，textLength=${item.textLength}，mode=${item.guidance.mode}，selectedCapabilityCount=${item.guidance.selectedCapabilityIds.length}`
     });
+    }
   }
 
   broadcastSharedRuntimeEvent(input.state, {
@@ -2997,6 +3183,14 @@ async function startNextQueuedInput(input: {
     sessionId: input.sessionId,
     items: input.context.inputQueue.list(input.sessionId)
   });
+  if (startedTurnToBroadcast !== null) {
+    broadcastSharedRuntimeEvent(input.state, {
+      type: "turn.status.updated",
+      sessionId: input.sessionId,
+      turnId: startedTurnToBroadcast.turnId,
+      status: startedTurnToBroadcast.status
+    });
+  }
 }
 
 async function startNextQueuedInputsForTerminalTurns(

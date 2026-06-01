@@ -63,6 +63,7 @@ export interface TimelineItem {
   id: string;
   sessionId: string;
   turnId: string;
+  clientMessageId?: string | null;
   kind: TimelineItemKind;
   status: TimelineItemStatus;
   title: string;
@@ -449,6 +450,7 @@ function baseItem(input: {
   id: string;
   sessionId: string;
   turnId: string;
+  clientMessageId?: string | null;
   kind: TimelineItemKind;
   status: TimelineItemStatus;
   title: string;
@@ -458,7 +460,7 @@ function baseItem(input: {
   updatedAt: string;
   isCollapsedByDefault?: boolean;
 }): TimelineItem {
-  return {
+  const item: TimelineItem = {
     id: input.id,
     sessionId: input.sessionId,
     turnId: input.turnId,
@@ -477,9 +479,58 @@ function baseItem(input: {
     planSteps: [],
     assetIds: []
   };
+  if (input.clientMessageId !== undefined) item.clientMessageId = input.clientMessageId;
+  return item;
 }
 
-function mapItem(input: { itemInput: unknown; sessionId: string; turnId: string; index: number; createdAt: string; updatedAt: string }): TimelineItem | null {
+function userClientMessageId(item: Record<string, unknown>): string | null {
+  return stringOrNull(item.clientMessageId) ??
+    stringOrNull(item.clientUserMessageId) ??
+    stringOrNull(item.clientId) ??
+    stringOrNull(item.client_id);
+}
+
+function firstString(item: Record<string, unknown>, fields: string[]): string {
+  for (const field of fields) {
+    const value = stringOrNull(item[field]);
+    if (value !== null) return value;
+  }
+  return "";
+}
+
+function imageGenerationText(item: Record<string, unknown>, fallback: string): string {
+  return firstString(item, ["revisedPrompt", "revised_prompt", "prompt", "text", "message", "summary"]) || fallback;
+}
+
+function assetIdsFromItem(item: Record<string, unknown>): string[] {
+  const result: string[] = [];
+  appendAssetId(result, firstString(item, ["assetId", "mediaAssetId", "artifactAssetId"]));
+  appendAssetIdsFromArray(result, item.assetIds);
+  appendAssetIdsFromArray(result, item.assets);
+  appendAssetIdsFromArray(result, item.mediaAssets);
+  appendAssetIdsFromArray(result, item.artifacts);
+  const asset = asRecord(item.asset);
+  appendAssetId(result, firstString(asset, ["id", "assetId", "mediaAssetId"]));
+  return result;
+}
+
+function appendAssetIdsFromArray(result: string[], value: unknown): void {
+  for (const entry of asArray(value)) {
+    if (typeof entry === "string") {
+      appendAssetId(result, entry);
+      continue;
+    }
+    const record = asRecord(entry);
+    appendAssetId(result, firstString(record, ["id", "assetId", "mediaAssetId"]));
+  }
+}
+
+function appendAssetId(result: string[], assetId: string): void {
+  if (assetId.length === 0 || result.includes(assetId)) return;
+  result.push(assetId);
+}
+
+function mapItem(input: { itemInput: unknown; sessionId: string; turnId: string; index: number; createdAt: string; updatedAt: string; turnClientMessageId?: string | null }): TimelineItem | null {
   const item = asRecord(input.itemInput);
   const type = stringOrNull(item.type);
   const classified = classifyCodexThreadItem(item);
@@ -489,7 +540,7 @@ function mapItem(input: { itemInput: unknown; sessionId: string; turnId: string;
   const text = itemText(item);
 
   if (classified.kind === "userMessage") {
-    return baseItem({ ...input, id, kind: "userMessage", status, title: "", text: classified.visibleText ?? text.trim(), rawText: classified.rawText, createdAt: input.createdAt, updatedAt: input.updatedAt });
+    return baseItem({ ...input, id, clientMessageId: userClientMessageId(item) ?? input.turnClientMessageId, kind: "userMessage", status, title: "", text: classified.visibleText ?? text.trim(), rawText: classified.rawText, createdAt: input.createdAt, updatedAt: input.updatedAt });
   }
 
   if (classified.kind === "hookPrompt") {
@@ -533,7 +584,21 @@ function mapItem(input: { itemInput: unknown; sessionId: string; turnId: string;
   }
 
   if (classified.kind === "imageView" || classified.kind === "imageGeneration" || classified.kind === "artifact") {
-    return baseItem({ ...input, id, kind: classified.kind, status, title: stringOrNull(item.title) ?? "产物", text, rawText: classified.rawText, createdAt: input.createdAt, updatedAt: input.updatedAt, isCollapsedByDefault: true });
+    const imageText = classified.kind === "imageGeneration" ? imageGenerationText(item, text) : text;
+    const imageItem = baseItem({
+      ...input,
+      id,
+      kind: classified.kind,
+      status,
+      title: classified.kind === "imageGeneration" ? stringOrNull(item.title) ?? "imagegen" : stringOrNull(item.title) ?? "产物",
+      text: imageText,
+      rawText: classified.rawText.length > 0 ? classified.rawText : imageText,
+      createdAt: input.createdAt,
+      updatedAt: input.updatedAt,
+      isCollapsedByDefault: true
+    });
+    imageItem.assetIds = assetIdsFromItem(item);
+    return imageItem;
   }
 
   if (classified.kind === "reviewStatus") {
@@ -586,6 +651,7 @@ export function mapCodexThreadToTimeline(threadInput: unknown, sessionId: string
     const completedAtValue = turn.completedAt ?? turn.completed_at;
     const completedAt = completedAtValue === undefined || completedAtValue === null ? null : unixSecondsToIso(completedAtValue, startedAt);
     const updatedAt = completedAt ?? startedAt;
+    const turnClientMessageId = userClientMessageId(turn);
     const items = asArray(turn.items);
     const mappedItems = items
       .map((itemInput, itemIndex) => mapItem({
@@ -594,7 +660,8 @@ export function mapCodexThreadToTimeline(threadInput: unknown, sessionId: string
         turnId,
         index: itemIndex,
         createdAt: startedAt,
-        updatedAt
+        updatedAt,
+        turnClientMessageId
       }))
       .filter((item): item is TimelineItem => item !== null);
     const status = inferTurnStatus({

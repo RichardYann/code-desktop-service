@@ -39,8 +39,8 @@ describe("desktop platform", () => {
     });
 
     expect(platform.kind).toBe("win32");
-    expect(platform.defaultDataDir()).toBe(path.join("C:\\Users\\demo\\AppData\\Roaming", "code"));
-    expect(platform.defaultStartupDir()).toBe(path.join(
+    expect(platform.defaultDataDir()).toBe(path.win32.join("C:\\Users\\demo\\AppData\\Roaming", "code"));
+    expect(platform.defaultStartupDir()).toBe(path.win32.join(
       "C:\\Users\\demo\\AppData\\Roaming",
       "Microsoft",
       "Windows",

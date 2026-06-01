@@ -607,6 +607,10 @@ async function chooseProjectRoot() {
   try {
     const result = await fetchJson("/api/project-roots/choose", { method: "POST" });
     renderProjectRoots(Array.isArray(result.roots) ? result.roots : []);
+    if (result.unsupported) {
+      if (status) status.textContent = result.message || "当前平台不支持系统目录选择器，请手动输入项目根目录路径。";
+      return;
+    }
     if (result.cancelled) {
       if (status) status.textContent = "已取消选择，项目根目录未变化。";
       showToast("已取消选择");
@@ -618,6 +622,26 @@ async function chooseProjectRoot() {
   } finally {
     if (button instanceof HTMLButtonElement) button.disabled = false;
   }
+}
+
+async function addManualProjectRoot() {
+  const input = byId("manual-project-root-path");
+  const status = byId("project-root-status");
+  const rawPath = input instanceof HTMLInputElement ? input.value.trim() : "";
+  if (!rawPath) {
+    if (status) status.textContent = "请输入项目根目录路径。";
+    return;
+  }
+  const result = await fetchJson("/api/project-roots", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: rawPath })
+  });
+  renderProjectRoots(Array.isArray(result.roots) ? result.roots : []);
+  if (input instanceof HTMLInputElement) input.value = "";
+  if (status) status.textContent = "项目根目录已保存，移动端刷新项目后可选择该根目录创建项目或新会话。";
+  showToast("项目根目录已添加");
+  await refreshAuditLogs();
 }
 
 async function removeProjectRoot(rootId, rootName) {
@@ -1079,6 +1103,26 @@ byId("copy-code")?.addEventListener("click", () => {
 byId("choose-project-root")?.addEventListener("click", () => {
   void chooseProjectRoot().catch((error) => {
     const message = error instanceof Error ? error.message : "项目根目录选择失败";
+    const status = byId("project-root-status");
+    if (status) status.textContent = message;
+    showToast(message);
+  });
+});
+
+byId("add-project-root-path")?.addEventListener("click", () => {
+  void addManualProjectRoot().catch((error) => {
+    const message = error instanceof Error ? error.message : "项目根目录添加失败";
+    const status = byId("project-root-status");
+    if (status) status.textContent = message;
+    showToast(message);
+  });
+});
+
+byId("manual-project-root-path")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  void addManualProjectRoot().catch((error) => {
+    const message = error instanceof Error ? error.message : "项目根目录添加失败";
     const status = byId("project-root-status");
     if (status) status.textContent = message;
     showToast(message);

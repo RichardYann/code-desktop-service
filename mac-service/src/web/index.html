@@ -777,6 +777,25 @@
         gap: 8px;
       }
 
+      .manual-project-root {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .manual-project-root input {
+        width: 100%;
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 10px;
+        background: var(--surface-strong);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+      }
+
       .project-root-status {
         margin-top: 9px;
         color: var(--muted);
@@ -1116,6 +1135,10 @@
         <div class="card-body">
           <div class="project-root-actions">
             <button id="choose-project-root" class="primary" type="button">选择文件夹</button>
+          </div>
+          <div class="manual-project-root">
+            <input id="manual-project-root-path" type="text" placeholder="输入项目根目录路径，例如 C:\\Users\\52960\\Documents\\Codex" />
+            <button id="add-project-root-path" class="secondary" type="button">添加路径</button>
           </div>
           <div id="project-root-status" class="project-root-status">
             项目根目录只用于移动端新建项目和创建新会话时选择创建位置，不会过滤或隐藏已经识别到的桌面端项目和历史对话。CODE_PROJECT_ROOTS 启动项会作为预置根目录显示。

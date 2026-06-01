@@ -125,6 +125,101 @@ describe("certificate trust service", () => {
     }]);
   });
 
+  it("detects trusted Windows current-user root certificate by fingerprint", async () => {
+    const calls: Array<{ file: string; args: string[] }> = [];
+    const caSha1 = "a1b2c3d4e5f60123456789abcdef0123456789ab";
+    const service = createCertificateTrustService({
+      platform: "win32",
+      run: async (file, args) => {
+        calls.push({ file, args });
+        if (args[0] === "-hashfile") {
+          return {
+            stdout: `SHA1 hash of C:\\code\\certs\\ca.crt:\n${caSha1.match(/.{1,2}/g)?.join(" ")}\nCertUtil: -hashfile command completed successfully.\n`,
+            stderr: ""
+          };
+        }
+        return {
+          stdout: `Serial Number: demo\nCert Hash(sha1): ${caSha1.match(/.{1,2}/g)?.join(" ").toUpperCase()}\n`,
+          stderr: ""
+        };
+      }
+    });
+
+    const result = await service.checkLocalCertificateTrust({
+      serverCertPath: "C:\\code\\certs\\server.crt",
+      caCertPath: "C:\\code\\certs\\ca.crt",
+      caFingerprint: "sha256-fingerprint-is-not-used-for-windows-store-matching",
+      hostname: "127.0.0.1"
+    });
+
+    expect(result).toMatchObject({
+      supported: true,
+      trusted: true,
+      message: "当前用户已信任 code 本地开发 CA"
+    });
+    expect(calls).toEqual([{
+      file: "certutil.exe",
+      args: ["-hashfile", "C:\\code\\certs\\ca.crt", "SHA1"]
+    }, {
+      file: "certutil.exe",
+      args: ["-user", "-store", "Root"]
+    }]);
+  });
+
+  it("reports untrusted Windows current-user root certificate when fingerprint is absent", async () => {
+    const calls: Array<{ file: string; args: string[] }> = [];
+    const caSha1 = "a1b2c3d4e5f60123456789abcdef0123456789ab";
+    const service = createCertificateTrustService({
+      platform: "win32",
+      run: async (file, args) => {
+        calls.push({ file, args });
+        if (args[0] === "-hashfile") {
+          return { stdout: `${caSha1.match(/.{1,2}/g)?.join(" ")}\n`, stderr: "" };
+        }
+        return { stdout: "Cert Hash(sha256): 11 22 33", stderr: "" };
+      }
+    });
+
+    const result = await service.checkLocalCertificateTrust({
+      serverCertPath: "C:\\code\\certs\\server.crt",
+      caCertPath: "C:\\code\\certs\\ca.crt",
+      caFingerprint: "sha256-fingerprint-is-not-used-for-windows-store-matching",
+      hostname: "127.0.0.1"
+    });
+
+    expect(result).toMatchObject({
+      supported: true,
+      trusted: false,
+      message: "当前用户尚未信任 code 本地开发 CA"
+    });
+    expect(calls).toEqual([{
+      file: "certutil.exe",
+      args: ["-hashfile", "C:\\code\\certs\\ca.crt", "SHA1"]
+    }, {
+      file: "certutil.exe",
+      args: ["-user", "-store", "Root"]
+    }]);
+  });
+
+  it("reports unsupported Windows trust detection when certutil cannot start", async () => {
+    const service = createCertificateTrustService({
+      platform: "win32",
+      run: async () => {
+        throw new Error("spawn certutil.exe ENOENT");
+      }
+    });
+
+    await expect(service.checkLocalCertificateTrust({
+      serverCertPath: "C:\\code\\certs\\server.crt",
+      caFingerprint: "a1b2c3d4",
+      hostname: "127.0.0.1"
+    })).resolves.toMatchObject({
+      supported: false,
+      trusted: false,
+      message: "无法启动 certutil.exe 检测 Windows 当前用户证书信任状态：spawn certutil.exe ENOENT"
+    });
+  });
+
   it("reports unsupported trust installation on other platforms", async () => {
     const service = createCertificateTrustService({
       platform: "linux",

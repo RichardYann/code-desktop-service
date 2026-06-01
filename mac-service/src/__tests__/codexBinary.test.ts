@@ -69,6 +69,18 @@ describe("findCodexBinary", () => {
     expect(result).toEqual({ ok: false, error: "未发现 Codex，请在桌面端安装 Codex 或配置 CODEX_BIN" });
   });
 
+  it("finds LOCALAPPDATA Codex bin candidates on Windows", () => {
+    const localCodex = "C:\\Users\\demo\\AppData\\Local\\OpenAI\\Codex\\bin\\abc123\\codex.exe";
+    const result = findCodexBinary({
+      env: { LOCALAPPDATA: "C:\\Users\\demo\\AppData\\Local" },
+      platform: "win32",
+      exists: (filePath) => filePath === localCodex,
+      readdir: () => ["abc123"]
+    });
+
+    expect(result).toEqual({ ok: true, path: localCodex });
+  });
+
   it("uses platform-neutral install guidance from app-server config discovery", async () => {
     vi.spyOn(fs, "existsSync").mockReturnValue(false);
 
@@ -120,5 +132,106 @@ describe("findCodexBinary", () => {
       { bin: "codex.cmd", args: ["app-server", "--help"] },
       { bin: "codex.cmd", args: ["remote-control", "--help"] }
     ]);
+  });
+
+  it("skips inaccessible WindowsApps Codex candidates and uses LOCALAPPDATA Codex bin", async () => {
+    const windowsApps = "C:\\Program Files\\WindowsApps\\codex.exe";
+    const localCodex = "C:\\Users\\demo\\AppData\\Local\\OpenAI\\Codex\\bin\\abc123\\codex.exe";
+    const calls: string[] = [];
+
+    const result = await detectCodexCli({
+      env: {
+        LOCALAPPDATA: "C:\\Users\\demo\\AppData\\Local",
+        PATH: "C:\\Program Files\\WindowsApps",
+        PATHEXT: ".EXE;.CMD"
+      },
+      platform: "win32",
+      exists: (filePath) => filePath === windowsApps || filePath === localCodex,
+      readdir: (dirPath) => dirPath.endsWith("\\OpenAI\\Codex\\bin") ? ["abc123"] : [],
+      run: async (bin, args) => {
+        calls.push(`${bin} ${args.join(" ")}`);
+        if (bin === windowsApps) {
+          throw Object.assign(new Error("Access is denied"), { code: "EACCES" });
+        }
+        if (args.join(" ") === "--version") {
+          return { stdout: "codex-cli 0.135.0-alpha.1", stderr: "" };
+        }
+        if (args.join(" ") === "app-server --help") {
+          return { stdout: "Usage: codex app-server\n--listen <URL>\nstdio:// unix:// ws://\n--ws-auth", stderr: "" };
+        }
+        if (args.join(" ") === "remote-control --help") {
+          return { stdout: "Usage: codex remote-control", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.path).toBe(localCodex);
+      expect(result.appServerAvailable).toBe(true);
+      expect(result.supportsStdio).toBe(true);
+    }
+    expect(calls[0]).toContain("WindowsApps");
+    expect(calls.some((call) => call.includes("abc123"))).toBe(true);
+  });
+
+  it("tries newer LOCALAPPDATA Codex bin directories first", async () => {
+    const oldCodex = "C:\\Users\\demo\\AppData\\Local\\OpenAI\\Codex\\bin\\aaa111\\codex.exe";
+    const newCodex = "C:\\Users\\demo\\AppData\\Local\\OpenAI\\Codex\\bin\\zzz999\\codex.exe";
+    const calls: string[] = [];
+
+    const result = await detectCodexCli({
+      env: { LOCALAPPDATA: "C:\\Users\\demo\\AppData\\Local" },
+      platform: "win32",
+      exists: (filePath) => filePath === oldCodex || filePath === newCodex,
+      readdir: () => ["aaa111", "zzz999"],
+      run: async (bin, args) => {
+        calls.push(`${bin} ${args.join(" ")}`);
+        if (args[0] === "--version") return { stdout: "codex-cli 0.135.0-alpha.1", stderr: "" };
+        return { stdout: "Usage: codex app-server\n--listen <URL>\nstdio://", stderr: "Usage: codex remote-control" };
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.path).toBe(newCodex);
+    }
+    expect(calls[0]).toContain("zzz999");
+  });
+
+  it("reports explicit CODEX_BIN execution failure without falling through silently", async () => {
+    const explicit = "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26\\app\\resources\\codex.exe";
+    const result = await detectCodexCli({
+      env: { CODEX_BIN: explicit },
+      platform: "win32",
+      exists: (filePath) => filePath === explicit,
+      run: async () => {
+        throw Object.assign(new Error("Access is denied"), { code: "EACCES" });
+      }
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("CODEX_BIN");
+      expect(result.error).toContain(explicit);
+      expect(result.error).toContain("Access is denied");
+    }
+  });
+
+  it("handles missing stdout and stderr from command runners", async () => {
+    const result = await detectCodexCli({
+      env: { CODEX_BIN: "/tmp/codex" },
+      exists: () => true,
+      run: async (_bin, args) => {
+        if (args[0] === "--version") return {};
+        return { stdout: "", stderr: "" };
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.version).toBe("");
+    }
   });
 });

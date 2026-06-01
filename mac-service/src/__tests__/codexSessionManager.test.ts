@@ -1,5 +1,3 @@
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createCodexSessionManager, mapCodexThreadToSessionSummary, normalizeCodexApproval, readCodexJsonlContextUsage, readCodexJsonlMessages, readCodexJsonlPendingApproval, readCodexJsonlPlanUpdates, type CodexThreadMetadata } from "../codex/codexSessionManager.js";
 
@@ -19,6 +17,29 @@ describe("codex session manager", () => {
 
     expect(created.threadId).toBe("thread-1");
     expect(calls.map((call) => call.method)).toEqual(["thread/start", "turn/start"]);
+  });
+
+  it("passes mobile client message ids to official turn/start and turn/steer", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const manager = createCodexSessionManager({
+      request: async (method, params = {}) => {
+        calls.push({ method, params });
+        if (method === "thread/start") return { threadId: "thread-1" };
+        if (method === "turn/start") return { turnId: "turn-1", status: "running" };
+        return {};
+      },
+      respond: () => undefined
+    });
+
+    await manager.createSession({ projectPath: null, text: "新建", clientUserMessageId: "client-create-1" });
+    await manager.startTurn({ threadId: "thread-1", text: "继续", clientUserMessageId: "client-start-1", skipPreflightResume: true });
+    await manager.steerTurn({ threadId: "thread-1", turnId: "turn-1", text: "补充", clientUserMessageId: "client-steer-1" });
+
+    expect(calls.filter((call) => call.method === "turn/start").map((call) => call.params.clientUserMessageId)).toEqual([
+      "client-create-1",
+      "client-start-1"
+    ]);
+    expect(calls.find((call) => call.method === "turn/steer")?.params.clientUserMessageId).toBe("client-steer-1");
   });
 
   it("renames a Codex thread through the official app-server method", async () => {
@@ -422,7 +443,7 @@ describe("codex session manager", () => {
               {
                 id: "thread-1",
                 preview: "继续推进 V1",
-                cwd: "/Users/lyz1022/DevEcoStudioProjects/Code",
+                cwd: "/Users/liuyongzhe/DevEcoStudioProjects/Code",
                 createdAt: 1778415573,
                 updatedAt: 1778423484,
                 status: { type: "running" },
@@ -441,7 +462,7 @@ describe("codex session manager", () => {
         id: "thread-1",
         toolId: "codex-mac",
         title: "code V1",
-        projectPath: "/Users/lyz1022/DevEcoStudioProjects/Code",
+        projectPath: "/Users/liuyongzhe/DevEcoStudioProjects/Code",
         projectName: "Code",
         createdAt: "2026-05-10T12:19:33.000Z",
         updatedAt: "2026-05-10T14:31:24.000Z",
@@ -463,7 +484,7 @@ describe("codex session manager", () => {
               {
                 id: "thread-state-title",
                 preview: "这是一段回复摘要，不应该显示在列表里",
-                cwd: "/Users/lyz1022/DevEcoStudioProjects/Code",
+                cwd: "/Users/liuyongzhe/DevEcoStudioProjects/Code",
                 createdAt: 1778415573,
                 updatedAt: 1778423484,
                 status: { type: "notLoaded" }
@@ -648,7 +669,7 @@ describe("codex session manager", () => {
       id: "thread-title",
       title: "test test test",
       preview: "这是一段最后回复摘要，不应该成为历史列表标题",
-      cwd: path.join(os.homedir(), "Documents", "Codex", "2026-05-12", "code-mobile-20260512-133019-test-test-test"),
+      cwd: "/Users/liuyongzhe/Documents/Codex/2026-05-12/code-mobile-20260512-133019-test-test-test",
       createdAt: 1778415573,
       updatedAt: 1778423484,
       status: { type: "notLoaded" }
@@ -667,7 +688,7 @@ describe("codex session manager", () => {
     const session = mapCodexThreadToSessionSummary({
       id: "thread-mobile-workspace",
       preview: "这是一段最后回复摘要，不应该成为历史列表标题",
-      cwd: path.join(os.homedir(), "Documents", "Codex", "2026-05-12", "code-mobile-20260512-133019-test-test-test"),
+      cwd: "/Users/liuyongzhe/Documents/Codex/2026-05-12/code-mobile-20260512-133019-test-test-test",
       createdAt: 1778415573,
       updatedAt: 1778423484,
       status: { type: "notLoaded" }
@@ -686,7 +707,7 @@ describe("codex session manager", () => {
     const session = mapCodexThreadToSessionSummary({
       id: "thread-conversation",
       preview: "创建语音生成技能",
-      cwd: path.join(os.homedir(), "Documents", "Codex", "2026-05-09", "skill-creator-users-lyz1022-codex-skills"),
+      cwd: "/Users/liuyongzhe/Documents/Codex/2026-05-09/skill-creator-users-liuyongzhe-codex-skills",
       createdAt: 1778415573,
       updatedAt: 1778423484,
       status: { type: "notLoaded" },
@@ -719,6 +740,8 @@ describe("codex session manager", () => {
               turns: [
                 {
                   id: "turn-1",
+                  startedAt: 1780125891,
+                  completedAt: 1780125907,
                   items: [
                     { id: "user-1", type: "userMessage", text: "解释项目结构" },
                     { id: "assistant-1", type: "message", role: "assistant", content: [{ type: "output_text", text: "这是一个 HarmonyOS 项目。" }] }
@@ -741,6 +764,7 @@ describe("codex session manager", () => {
     expect(detail.messages.map((message) => ({ role: message.role, text: message.text }))).toEqual([
       { role: "assistant", text: "这是一个 HarmonyOS 项目。" }
     ]);
+    expect(detail.messages[0].createdAt).toBe("2026-05-30T07:24:51.000Z");
     expect(detail.turns[0].items.map((item) => item.kind)).toEqual(["userMessage", "agentMessage"]);
   });
 
@@ -1374,6 +1398,29 @@ describe("codex session manager", () => {
     await manager.interruptTurn({ threadId: "thread-1", turnId: "turn-1" });
 
     expect(calls).toEqual(["turn/steer", "turn/interrupt"]);
+  });
+
+  it("passes empty turn id through for startup interruption", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const manager = createCodexSessionManager({
+      request: async (method, params = {}) => {
+        calls.push({ method, params });
+        return {};
+      },
+      respond: () => undefined
+    });
+
+    await manager.interruptTurn({ threadId: "thread-startup", turnId: "" });
+
+    expect(calls).toEqual([
+      {
+        method: "turn/interrupt",
+        params: {
+          threadId: "thread-startup",
+          turnId: ""
+        }
+      }
+    ]);
   });
 
   it("passes structured input items to turn/steer", async () => {

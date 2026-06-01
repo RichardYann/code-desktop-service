@@ -44,6 +44,10 @@ function traceProtocolPacket(direction: string, packet: unknown): void {
   process.stderr.write(`[codex-app-server:${direction}] ${JSON.stringify(packet)}\n`);
 }
 
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 export function createCodexAppServerClient(transport: AppServerTransport, options: CodexAppServerClientOptions = {}) {
   const pending = new Map<string, PendingRequest>();
   const serverRequestIds = new Map<string, string | number>();
@@ -114,7 +118,13 @@ export function createCodexAppServerClient(transport: AppServerTransport, option
       }, timeoutMsForMethod(method));
       pending.set(id, { resolve, reject, timeout });
       traceProtocolPacket("send", packet);
-      transport.send(payload);
+      try {
+        transport.send(payload);
+      } catch (error) {
+        clearTimeout(timeout);
+        pending.delete(id);
+        reject(asError(error));
+      }
     });
   }
 
@@ -130,7 +140,11 @@ export function createCodexAppServerClient(transport: AppServerTransport, option
           experimentalApi: true
         }
       });
-      transport.send(JSON.stringify({ method: "initialized" }));
+      try {
+        transport.send(JSON.stringify({ method: "initialized" }));
+      } catch {
+        // The initialized notification is best-effort; the initialize request has already completed.
+      }
       return result;
     },
 
@@ -143,7 +157,11 @@ export function createCodexAppServerClient(transport: AppServerTransport, option
       serverRequestIds.delete(id);
       const packet = { id: rawId, result };
       traceProtocolPacket("send", packet);
-      transport.send(JSON.stringify(packet));
+      try {
+        transport.send(JSON.stringify(packet));
+      } catch {
+        // Server-request responses cannot be awaited by callers; closed transports are ignored here.
+      }
     },
 
     onNotification(method: CodexNotificationMethod, handler: (params: Record<string, unknown>) => void): void {

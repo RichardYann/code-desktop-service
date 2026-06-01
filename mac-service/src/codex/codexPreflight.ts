@@ -80,11 +80,28 @@ function blockedPreflight(checkedAt: string, message: string): CodexPreflight {
   };
 }
 
+function blockedPreflightForDetectedCli(
+  checkedAt: string,
+  detected: Extract<Awaited<ReturnType<typeof detectCodexCli>>, { ok: true }>,
+  message: string
+): CodexPreflight {
+  return {
+    ...blockedPreflight(checkedAt, message),
+    codexBin: detected.path,
+    cliVersion: detected.version,
+    appServerAvailable: detected.appServerAvailable,
+    remoteControlAvailable: detected.remoteControlAvailable
+  };
+}
+
 export async function runCodexPreflight(input: RunCodexPreflightInput): Promise<CodexPreflight> {
   const checkedAt = new Date().toISOString();
   const detected = await (input.detectCli ?? detectCodexCli)();
   if (!detected.ok) {
     return blockedPreflight(checkedAt, detected.error);
+  }
+  if (!detected.appServerAvailable) {
+    return blockedPreflightForDetectedCli(checkedAt, detected, "Codex App Server 不可用，请确认当前 Codex CLI 支持 app-server");
   }
 
   try {

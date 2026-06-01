@@ -67,4 +67,33 @@ describe("codex preflight", () => {
 
     expect(result).toMatchObject({ status: "ok", authStatus: "ok", model: "gpt-5.5" });
   });
+
+  it("does not call app-server client methods when app-server help is unavailable", async () => {
+    let requested = false;
+    const result = await runCodexPreflight({
+      detectCli: async () => ({
+        ok: true,
+        path: "C:\\bad\\codex.exe",
+        version: "codex-cli 0.135.0-alpha.1",
+        appServerAvailable: false,
+        remoteControlAvailable: false,
+        supportsUnixSocket: false,
+        supportsStdio: false,
+        supportsWsAuth: false
+      }),
+      client: {
+        request: async () => {
+          requested = true;
+          return {};
+        }
+      }
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.codexBin).toBe("C:\\bad\\codex.exe");
+    expect(result.cliVersion).toBe("codex-cli 0.135.0-alpha.1");
+    expect(result.appServerAvailable).toBe(false);
+    expect(result.message).toContain("Codex App Server");
+    expect(requested).toBe(false);
+  });
 });

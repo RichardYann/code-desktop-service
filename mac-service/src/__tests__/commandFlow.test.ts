@@ -21,7 +21,8 @@ type TestServer = Awaited<ReturnType<typeof createServer>> & {
 type TestContext = ReturnType<typeof createTestAppContext>;
 type TestRuntime = Awaited<ReturnType<TestContext["codex"]["createSessionRuntime"]>>;
 type TestRuntimeSessions = TestRuntime["sessions"];
-type TestRuntimeSessionsWithCompact = TestRuntimeSessions & {
+type TestRuntimeSessionsWithCompact = Omit<TestRuntimeSessions, "createThread"> & {
+  createThread?: TestRuntimeSessions["createThread"];
   compactContext?: (input: { threadId: string }) => Promise<unknown>;
 };
 
@@ -119,7 +120,7 @@ function createRuntime(sessionOverrides: Partial<TestRuntimeSessionsWithCompact>
   Object.assign(sessions, sessionOverrides);
   return {
     client: createNoopNotificationClient(),
-    sessions,
+    sessions: sessions as TestRuntimeSessions,
     stop: async () => undefined
   };
 }
@@ -242,6 +243,83 @@ describe("command flow", () => {
     });
 
     expect(update.requestId).toBe("create-session-match");
+    ws.terminate();
+  });
+
+  it("publishes a created session before the first turn start finishes", async () => {
+    const context = createTestAppContext();
+    let resolveStartTurn = (_value: { turnId: string; status: string }): void => {
+      throw new Error("start turn resolver was not captured");
+    };
+    let startTurnSettled = false;
+    let startedText = "";
+    let startedClientUserMessageId = "";
+    let skippedPreflightResume = false;
+    const runtime = createRuntime({
+      listSessionSummaries: async () => [],
+      createSession: async () => {
+        throw new Error("session.create should not wait for the combined createSession path");
+      },
+      startTurn: async (input) => {
+        startedText = turnInputText(input);
+        startedClientUserMessageId = input.clientUserMessageId ?? "";
+        skippedPreflightResume = asRecord(input).skipPreflightResume === true;
+        const result = await new Promise<{ turnId: string; status: string }>((resolve) => {
+          resolveStartTurn = resolve;
+        });
+        startTurnSettled = true;
+        return result;
+      }
+    });
+    Object.assign(runtime.sessions, {
+      createThread: async (input: { projectPath: string | null; text: string }) => ({
+        threadId: "thread-fast-create",
+        projectPath: input.projectPath
+      })
+    });
+    context.codex.createSessionRuntime = async () => runtime;
+    server = await createServer(context);
+    await server.ready();
+    const { ws } = await openAuthedWs(context, server as TestServer);
+    const messages = collectWsMessages(ws);
+
+    sendCommand(ws, {
+      type: "session.create",
+      requestId: "fast-create",
+      clientMessageId: "client-create-1",
+      toolId: "codex-mac",
+      projectPath: null,
+      text: "快速创建"
+    });
+
+    const update = await waitForWsMessage(messages, (message) => {
+      const session = asRecord(message.session);
+      return message.type === "session.updated" &&
+        message.requestId === "fast-create" &&
+        session.id === "thread-fast-create";
+    });
+    const received = await waitForWsMessage(messages, (message) => {
+      const receivedMessage = asRecord(message.message);
+      return message.type === "message.updated" &&
+        receivedMessage.sessionId === "thread-fast-create" &&
+        receivedMessage.id === "client-create-1" &&
+        receivedMessage.clientMessageId === "client-create-1" &&
+        receivedMessage.sendState === "received";
+    });
+
+    expect(update.requestId).toBe("fast-create");
+    expect(received.type).toBe("message.updated");
+    expect(startedText).toBe("快速创建");
+    expect(startedClientUserMessageId).toBe("client-create-1");
+    expect(skippedPreflightResume).toBe(true);
+    expect(startTurnSettled).toBe(false);
+
+    resolveStartTurn({ turnId: "turn-fast-create", status: "running" });
+    await waitForCondition(() => startTurnSettled);
+    await waitForWsMessage(messages, (message) => message.type === "turn.status.updated" &&
+      message.sessionId === "thread-fast-create" &&
+      message.turnId === "turn-fast-create" &&
+      message.status === "running");
     ws.terminate();
   });
 
@@ -692,6 +770,7 @@ describe("command flow", () => {
       type: "session.attachments.send",
       requestId: "attachments-1",
       sessionId: "thread-1",
+      clientMessageId: "client-attachments-1",
       attachmentIds: ["asset-1"]
     }).type).toBe("session.attachments.send");
 
@@ -934,7 +1013,7 @@ describe("command flow", () => {
           id: "new-account-session",
           toolId: "codex-mac",
           title: "切换账号后的新会话",
-          projectPath: "/Users/lyz1022/DevEcoStudioProjects/Code",
+          projectPath: "/Users/liuyongzhe/DevEcoStudioProjects/Code",
           projectName: "Code",
           createdAt: "2026-05-22T12:20:00.000Z",
           updatedAt: "2026-05-22T12:21:00.000Z",
@@ -1080,6 +1159,7 @@ describe("command flow", () => {
       type: "session.attachments.send",
       requestId: "attachments-1",
       sessionId: "thread-1",
+      clientMessageId: "client-attachments-1",
       attachmentIds: [prepared.asset.id]
     }));
 
@@ -1097,7 +1177,7 @@ describe("command flow", () => {
       kind: "message.received",
       requestId: "attachments-1",
       sessionId: "thread-1",
-      messageId: "attachments-1"
+      messageId: "client-attachments-1"
     });
   });
 
@@ -1349,6 +1429,7 @@ describe("command flow", () => {
       type: "session.attachments.send",
       requestId: "attachments-image-idle",
       sessionId: "thread-image-attachments",
+      clientMessageId: "client-attachments-image-idle",
       attachmentIds: [idleImage.asset.id]
     }));
     await waitForCondition(() => startInputs.length === 1);
@@ -1367,6 +1448,7 @@ describe("command flow", () => {
       type: "session.attachments.send",
       requestId: "attachments-image-active",
       sessionId: "thread-image-attachments",
+      clientMessageId: "client-attachments-image-active",
       attachmentIds: [activeImage.asset.id]
     }));
     await waitForCondition(() => steerInputs.length === 1);
@@ -1960,7 +2042,7 @@ describe("command flow", () => {
     ws.terminate();
   });
 
-  it("syncs Codex imagegen output into media snapshots and assistant output items", async () => {
+  it("syncs Codex imagegen output into media snapshots and image generation items", async () => {
     const context = createTestAppContext();
     const generatedImagesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "code-ws-generated-images-"));
     const generatedSessionDir = path.join(generatedImagesRoot, "thread-1");
@@ -1991,7 +2073,25 @@ describe("command flow", () => {
       status: "completed",
       startedAt: "2026-05-18T12:30:39.064Z",
       completedAt: "2026-05-18T12:32:56.375Z",
-      items: []
+      items: [{
+        id: "ig_ws",
+        sessionId: "thread-1",
+        turnId: "turn-1",
+        kind: "imageGeneration",
+        status: "running",
+        title: "imagegen",
+        text: "",
+        rawText: "",
+        createdAt: "2026-05-18T12:32:55.366Z",
+        updatedAt: "2026-05-18T12:32:55.366Z",
+        isStreaming: true,
+        isCollapsedByDefault: false,
+        command: null,
+        diff: null,
+        approval: null,
+        planSteps: [],
+        assetIds: []
+      }]
     }];
     context.codex.createSessionRuntime = async () => createRuntime({
       listSessionSummaries: async () => [],
@@ -2028,12 +2128,192 @@ describe("command flow", () => {
       codexInputStatus: "notRequired"
     }]);
     const assetList = assets.assets as Array<{ id: string }>;
-    const turns = snapshot.turns as Array<{ items: Array<{ kind: string; title?: string; assetIds?: string[] }> }>;
+    const turns = snapshot.turns as Array<{ items: Array<{ id: string; kind: string; status?: string; title?: string; assetIds?: string[] }> }>;
     expect(turns[0].items[0]).toMatchObject({
-      kind: "agentMessage",
-      title: "codex-image-output",
+      id: "ig_ws",
+      kind: "imageGeneration",
+      status: "completed",
+      title: "imagegen",
       assetIds: [assetList[0].id]
     });
+    ws.terminate();
+  });
+
+  it("binds Codex image artifacts to the recent running image generation item when call id is missing from canonical items", async () => {
+    const context = createTestAppContext();
+    const generatedImagesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "code-ws-generated-images-"));
+    const generatedSessionDir = path.join(generatedImagesRoot, "thread-running-fallback");
+    fs.mkdirSync(generatedSessionDir, { recursive: true });
+    const imagePath = path.join(generatedSessionDir, "ig_running_fallback.png");
+    fs.writeFileSync(imagePath, PNG_BYTES);
+    const rolloutPath = path.join(generatedImagesRoot, "rollout.jsonl");
+    fs.writeFileSync(rolloutPath, JSON.stringify({
+      timestamp: "2026-05-18T12:32:55.366Z",
+      type: "image_generation_end",
+      payload: {
+        type: "image_generation_end",
+        call_id: "ig_running_fallback",
+        saved_path: imagePath
+      }
+    }) + "\n");
+    context.codexGeneratedImages = createCodexGeneratedImageArtifactService({
+      mediaAssetRepository: context.repositories.mediaAssets,
+      sessionAttachmentRepository: context.repositories.sessionAttachments,
+      storageDir: path.join(context.config.dataDir, "media-assets"),
+      generatedImagesRoot
+    });
+    const detail = sessionDetail("thread-running-fallback");
+    detail.rolloutPath = rolloutPath;
+    detail.turns = [{
+      id: "turn-1",
+      sessionId: "thread-running-fallback",
+      status: "completed",
+      startedAt: "2026-05-18T12:30:39.064Z",
+      completedAt: "2026-05-18T12:32:56.375Z",
+      items: [
+        {
+          id: "pending-imagegen-owner",
+          sessionId: "thread-running-fallback",
+          turnId: "turn-1",
+          kind: "imageGeneration",
+          status: "running",
+          title: "imagegen",
+          text: "",
+          rawText: "",
+          createdAt: "2026-05-18T12:32:54.366Z",
+          updatedAt: "2026-05-18T12:32:54.366Z",
+          isStreaming: true,
+          isCollapsedByDefault: false,
+          command: null,
+          diff: null,
+          approval: null,
+          planSteps: [],
+          assetIds: []
+        },
+        {
+          id: "completed-imagegen-nearby",
+          sessionId: "thread-running-fallback",
+          turnId: "turn-1",
+          kind: "imageGeneration",
+          status: "completed",
+          title: "imagegen",
+          text: "",
+          rawText: "",
+          createdAt: "2026-05-18T12:32:55.000Z",
+          updatedAt: "2026-05-18T12:32:55.000Z",
+          isStreaming: false,
+          isCollapsedByDefault: false,
+          command: null,
+          diff: null,
+          approval: null,
+          planSteps: [],
+          assetIds: []
+        }
+      ]
+    }];
+    context.codex.createSessionRuntime = async () => createRuntime({
+      listSessionSummaries: async () => [],
+      readSessionDetail: async () => detail
+    });
+    server = await createServer(context);
+    await server.ready();
+    const { ws } = await openAuthedWs(context, server as TestServer);
+    const messages = collectWsMessages(ws);
+    await waitForWsMessage(messages, (message) => message.type === "sessions.snapshot");
+
+    sendCommand(ws, {
+      type: "session.sync.enable",
+      requestId: "sync-imagegen-running-fallback",
+      sessionId: "thread-running-fallback",
+      activeDetail: true
+    });
+
+    const snapshot = await waitForWsMessage(messages, (message) =>
+      message.type === "thread.detail.snapshot" && message.sessionId === "thread-running-fallback");
+    const assets = await waitForWsMessage(messages, (message) =>
+      message.type === "session.assets.updated" && message.sessionId === "thread-running-fallback");
+
+    const assetList = assets.assets as Array<{ id: string }>;
+    const turns = snapshot.turns as Array<{ items: Array<{ id: string; kind: string; status?: string; assetIds?: string[] }> }>;
+    expect(turns[0].items[0]).toMatchObject({
+      id: "pending-imagegen-owner",
+      kind: "imageGeneration",
+      status: "completed",
+      assetIds: [assetList[0].id]
+    });
+    expect(turns[0].items[1]).toMatchObject({
+      id: "completed-imagegen-nearby",
+      kind: "imageGeneration",
+      assetIds: []
+    });
+    ws.terminate();
+  });
+
+  it("synthesizes image generation timeline items for Codex image artifacts when no canonical owner exists", async () => {
+    const context = createTestAppContext();
+    const generatedImagesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "code-ws-generated-images-"));
+    const generatedSessionDir = path.join(generatedImagesRoot, "thread-synthetic-imagegen");
+    fs.mkdirSync(generatedSessionDir, { recursive: true });
+    const imagePath = path.join(generatedSessionDir, "ig_synthetic.png");
+    fs.writeFileSync(imagePath, PNG_BYTES);
+    const rolloutPath = path.join(generatedImagesRoot, "rollout.jsonl");
+    fs.writeFileSync(rolloutPath, JSON.stringify({
+      timestamp: "2026-05-18T12:32:55.366Z",
+      type: "image_generation_end",
+      payload: {
+        type: "image_generation_end",
+        call_id: "ig_synthetic",
+        saved_path: imagePath
+      }
+    }) + "\n");
+    context.codexGeneratedImages = createCodexGeneratedImageArtifactService({
+      mediaAssetRepository: context.repositories.mediaAssets,
+      sessionAttachmentRepository: context.repositories.sessionAttachments,
+      storageDir: path.join(context.config.dataDir, "media-assets"),
+      generatedImagesRoot
+    });
+    const detail = sessionDetail("thread-synthetic-imagegen");
+    detail.rolloutPath = rolloutPath;
+    detail.turns = [{
+      id: "turn-1",
+      sessionId: "thread-synthetic-imagegen",
+      status: "completed",
+      startedAt: "2026-05-18T12:30:39.064Z",
+      completedAt: "2026-05-18T12:32:56.375Z",
+      items: []
+    }];
+    context.codex.createSessionRuntime = async () => createRuntime({
+      listSessionSummaries: async () => [],
+      readSessionDetail: async () => detail
+    });
+    server = await createServer(context);
+    await server.ready();
+    const { ws } = await openAuthedWs(context, server as TestServer);
+    const messages = collectWsMessages(ws);
+    await waitForWsMessage(messages, (message) => message.type === "sessions.snapshot");
+
+    sendCommand(ws, {
+      type: "session.sync.enable",
+      requestId: "sync-imagegen-synthetic",
+      sessionId: "thread-synthetic-imagegen",
+      activeDetail: true
+    });
+
+    const snapshot = await waitForWsMessage(messages, (message) =>
+      message.type === "thread.detail.snapshot" && message.sessionId === "thread-synthetic-imagegen");
+    const assets = await waitForWsMessage(messages, (message) =>
+      message.type === "session.assets.updated" && message.sessionId === "thread-synthetic-imagegen");
+
+    const assetList = assets.assets as Array<{ id: string }>;
+    const turns = snapshot.turns as Array<{ items: Array<{ id: string; kind: string; title?: string; assetIds?: string[] }> }>;
+    expect(turns[0].items).toHaveLength(1);
+    expect(turns[0].items[0]).toMatchObject({
+      id: "ig_synthetic",
+      kind: "imageGeneration",
+      title: "imagegen",
+      assetIds: [assetList[0].id]
+    });
+    expect(turns[0].items[0].kind).not.toBe("agentMessage");
     ws.terminate();
   });
 
@@ -2400,6 +2680,7 @@ describe("command flow", () => {
     const context = createTestAppContext();
     const notificationHandlers = new Map<string, (params: Record<string, unknown>) => void>();
     const startedTexts: string[] = [];
+    const startedClientIds: string[] = [];
     const steerCalls: string[] = [];
     context.codex.createSessionRuntime = async () => ({
       ...createRuntime({
@@ -2982,7 +3263,7 @@ describe("command flow", () => {
 
     await router.handle(ClientCommandSchema.parse({ type: "session.create", requestId: "r1", toolId: "codex-mac", projectPath: null, text: "开始" }));
     await router.handle(ClientCommandSchema.parse({ type: "session.read", requestId: "r-read", sessionId: "thread-1" }));
-    await router.handle(ClientCommandSchema.parse({ type: "session.steer", requestId: "r2", sessionId: "thread-1", text: "改方向" }));
+    await router.handle(ClientCommandSchema.parse({ type: "session.steer", requestId: "r2", sessionId: "thread-1", clientMessageId: "m-steer-r2", text: "改方向" }));
     await router.handle(ClientCommandSchema.parse({ type: "session.interrupt", requestId: "r3", sessionId: "thread-1" }));
     await router.handle(ClientCommandSchema.parse({
       type: "approval.respond",
@@ -3000,6 +3281,8 @@ describe("command flow", () => {
 
   it("queues ordinary sends during cached active turns and steers only explicit interventions", async () => {
     const calls: string[] = [];
+    const startedClientIds: string[] = [];
+    const steeredClientIds: string[] = [];
     const queue = createSessionInputQueueService();
     const router = createCommandRouter({
       sessions: {
@@ -3018,12 +3301,14 @@ describe("command flow", () => {
           statusLabel: "notLoaded",
           lastMessagePreview: "详情"
         }, messages: [], turns: [] }),
-        startTurn: async () => {
+        startTurn: async (input) => {
           calls.push("turn/start");
+          startedClientIds.push(input.clientUserMessageId ?? "");
           return { turnId: "turn-new" };
         },
-        steerTurn: async () => {
+        steerTurn: async (input) => {
           calls.push("turn/steer");
+          steeredClientIds.push(input.clientUserMessageId ?? "");
           return {};
         },
         interruptTurn: async () => ({}),
@@ -3034,13 +3319,15 @@ describe("command flow", () => {
 
     router.noteTurnStarted("thread-1", "turn-live");
     const queued = await router.handle(ClientCommandSchema.parse({ type: "session.sendText", requestId: "r1", sessionId: "thread-1", clientMessageId: "m1", text: "继续" }));
-    await router.handle(ClientCommandSchema.parse({ type: "session.steer", requestId: "r-steer", sessionId: "thread-1", text: "补充当前 turn" }));
+    await router.handle(ClientCommandSchema.parse({ type: "session.steer", requestId: "r-steer", sessionId: "thread-1", clientMessageId: "m-steer", text: "补充当前 turn" }));
     await waitForCondition(() => calls.includes("turn/steer"));
     router.noteTurnCompleted("thread-1");
     await router.handle(ClientCommandSchema.parse({ type: "session.sendText", requestId: "r2", sessionId: "thread-1", clientMessageId: "m2", text: "下一步" }));
 
     expect(queued?.kind).toBe("input.queue.updated");
     expect(calls).toEqual(["turn/steer", "turn/start"]);
+    expect(steeredClientIds).toEqual(["m-steer"]);
+    expect(startedClientIds).toEqual(["m2"]);
     expect(queue.list("thread-1")[0]?.text).toBe("继续");
   });
 
@@ -3090,6 +3377,7 @@ describe("command flow", () => {
       type: "session.steer",
       requestId: "r-steer-after-late-start",
       sessionId: "thread-late-start",
+      clientMessageId: "m-steer-after-late-start",
       text: "补充当前任务"
     }));
 
@@ -3998,7 +4286,7 @@ describe("command flow", () => {
     await waitForAuditRows(context, 2);
     sendCommand(ws, { type: "session.sendText", requestId: "r-send", sessionId: "thread-created", clientMessageId: "m-send", text: secretText });
     await waitForAuditRows(context, 3);
-    sendCommand(ws, { type: "session.steer", requestId: "r-steer", sessionId: "thread-created", text: secretText });
+    sendCommand(ws, { type: "session.steer", requestId: "r-steer", sessionId: "thread-created", clientMessageId: "m-steer", text: secretText });
     await waitForAuditRows(context, 4);
     sendCommand(ws, { type: "session.interrupt", requestId: "r-interrupt", sessionId: "thread-created" });
     await waitForAuditRows(context, 5);
@@ -4357,7 +4645,7 @@ describe("command flow", () => {
 
     sendCommand(ws, { type: "session.sync.enable", requestId: "sync-running-from-detail", sessionId: "thread-running-from-detail" });
     await waitForWsMessage(messages, (message) => message.type === "thread.detail.snapshot" && message.sessionId === "thread-running-from-detail");
-    sendCommand(ws, { type: "session.steer", requestId: "steer-running-from-detail", sessionId: "thread-running-from-detail", text: "继续当前 turn" });
+    sendCommand(ws, { type: "session.steer", requestId: "steer-running-from-detail", sessionId: "thread-running-from-detail", clientMessageId: "steer-running-from-detail", text: "继续当前 turn" });
 
     await waitForWsMessage(messages, (message) => message.type === "message.updated" &&
       (message.message as Record<string, unknown> | undefined)?.clientMessageId === "steer-running-from-detail");
@@ -4391,7 +4679,7 @@ describe("command flow", () => {
 
     sendCommand(ws, { type: "session.sync.enable", requestId: "sync-guided-steer", sessionId: "thread-guided-steer" });
     await waitForWsMessage(messages, (message) => message.type === "thread.detail.snapshot" && message.sessionId === "thread-guided-steer");
-    sendCommand(ws, { type: "session.steer", requestId: "steer-guided-steer", sessionId: "thread-guided-steer", text: "把当前轮按这个方向继续" });
+    sendCommand(ws, { type: "session.steer", requestId: "steer-guided-steer", sessionId: "thread-guided-steer", clientMessageId: "steer-guided-steer", text: "把当前轮按这个方向继续" });
 
     const ack = await waitForWsMessage(messages, (message) => message.type === "message.updated" &&
       (message.message as Record<string, unknown> | undefined)?.clientMessageId === "steer-guided-steer");
@@ -4693,8 +4981,8 @@ describe("command flow", () => {
             kind: "agentMessage",
             status: "completed",
             title: "",
-            text: "完成\n::git-commit{cwd=\"/Users/lyz1022/DevEcoStudioProjects/Code\"}",
-            rawText: "完成\n::git-commit{cwd=\"/Users/lyz1022/DevEcoStudioProjects/Code\"}",
+            text: "完成\n::git-commit{cwd=\"/Users/liuyongzhe/DevEcoStudioProjects/Code\"}",
+            rawText: "完成\n::git-commit{cwd=\"/Users/liuyongzhe/DevEcoStudioProjects/Code\"}",
             createdAt: "2026-05-13T00:01:05.000Z",
             updatedAt: "2026-05-13T00:01:05.000Z",
             isStreaming: false,
@@ -4790,12 +5078,14 @@ describe("command flow", () => {
     const context = createTestAppContext();
     const notificationHandlers = new Map<string, (params: Record<string, unknown>) => void>();
     const startedTexts: string[] = [];
+    const startedClientIds: string[] = [];
     context.codex.createSessionRuntime = async () => ({
       ...createRuntime({
         listSessionSummaries: async () => [],
         readSessionDetail: async () => sessionDetail("thread-auto-queue"),
         startTurn: async (input) => {
           startedTexts.push(turnInputText(input));
+          startedClientIds.push(input.clientUserMessageId ?? "");
           return { turnId: `turn-auto-${startedTexts.length}`, status: "running" };
         }
       }),
@@ -4870,7 +5160,12 @@ describe("command flow", () => {
         items[0]?.status === "sent" &&
         items[1]?.status === "queued";
     });
+    await waitForWsMessage(messages, (message) => message.type === "turn.status.updated" &&
+      message.sessionId === "thread-auto-queue" &&
+      message.turnId === "turn-auto-1" &&
+      message.status === "running");
     expect(startedTexts).toEqual(["第一条排队输入"]);
+    expect(startedClientIds).toEqual(["message-auto-1"]);
     const auditRows = context.audit.list(20) as AuditRow[];
     expect(auditRows.some((row) => row.session_id === "thread-auto-queue" &&
       row.action_type === "session.inputQueue.autoSend" &&
@@ -5412,6 +5707,70 @@ describe("command flow", () => {
         item?.sessionId === "thread-live-order" &&
         item?.text === "已收到移动端消息";
     });
+    ws.terminate();
+  });
+
+  it("uses the mobile-provided turn id when interrupting a session", async () => {
+    const context = createTestAppContext();
+    const interruptedTurns: string[] = [];
+    context.codex.createSessionRuntime = async () =>
+      createRuntime({
+        listSessionSummaries: async () => [],
+        readSessionDetail: async () => {
+          throw new Error("readSessionDetail should not be needed when turnId is provided");
+        },
+        interruptTurn: async (input) => {
+          interruptedTurns.push(`${input.threadId}:${input.turnId}`);
+          return {};
+        }
+      });
+    server = await createServer(context);
+    await server.ready();
+    const { ws } = await openAuthedWs(context, server as TestServer);
+    const messages = collectWsMessages(ws);
+    await waitForWsMessage(messages, (message) => message.type === "sessions.snapshot");
+
+    sendCommand(ws, {
+      type: "session.interrupt",
+      requestId: "r-interrupt-explicit-turn",
+      sessionId: "thread-explicit",
+      turnId: "turn-explicit"
+    });
+    await waitForCondition(() => interruptedTurns.length === 1);
+
+    expect(interruptedTurns).toEqual(["thread-explicit:turn-explicit"]);
+    ws.terminate();
+  });
+
+  it("forwards mobile startup interrupt with an empty turn id", async () => {
+    const context = createTestAppContext();
+    const interruptedTurns: string[] = [];
+    context.codex.createSessionRuntime = async () =>
+      createRuntime({
+        listSessionSummaries: async () => [],
+        readSessionDetail: async () => {
+          throw new Error("readSessionDetail should not be needed for startup interrupt");
+        },
+        interruptTurn: async (input) => {
+          interruptedTurns.push(`${input.threadId}:${input.turnId}`);
+          return {};
+        }
+      });
+    server = await createServer(context);
+    await server.ready();
+    const { ws } = await openAuthedWs(context, server as TestServer);
+    const messages = collectWsMessages(ws);
+    await waitForWsMessage(messages, (message) => message.type === "sessions.snapshot");
+
+    sendCommand(ws, {
+      type: "session.interrupt",
+      requestId: "r-startup-interrupt",
+      sessionId: "thread-startup",
+      targetKind: "startup"
+    });
+    await waitForCondition(() => interruptedTurns.length === 1);
+
+    expect(interruptedTurns).toEqual(["thread-startup:"]);
     ws.terminate();
   });
 
@@ -5996,6 +6355,46 @@ describe("command flow", () => {
     ws.terminate();
   });
 
+  it("does not mark a send failed when turn start times out after mobile acknowledgement", async () => {
+    const context = createTestAppContext();
+    context.codex.createSessionRuntime = async () =>
+      createRuntime({
+        listSessionSummaries: async () => [],
+        startTurn: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          throw new Error("Codex App Server request timed out: turn/start");
+        }
+      });
+    server = await createServer(context);
+    await server.ready();
+    const { ws } = await openAuthedWs(context, server as TestServer);
+    const messages = collectWsMessages(ws);
+    await waitForWsMessage(messages, (message) => message.type === "sessions.snapshot");
+
+    sendCommand(ws, {
+      type: "session.sendText",
+      requestId: "send-turn-start-timeout",
+      sessionId: "thread-timeout",
+      clientMessageId: "client-timeout",
+      text: "测试审批功能，发一条审批指令给我"
+    });
+
+    await waitForWsMessage(messages, (message) => {
+      const receivedMessage = asRecord(message.message);
+      return message.type === "message.updated" &&
+        receivedMessage.clientMessageId === "client-timeout" &&
+        receivedMessage.sendState === "received";
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(await hasWsMessage(messages, (message) =>
+      message.type === "command.failed" &&
+      message.requestId === "send-turn-start-timeout" &&
+      message.clientMessageId === "client-timeout"
+    )).toBe(false);
+    ws.terminate();
+  });
+
   it("records sanitized audit rows for failed WebSocket client commands", async () => {
     const context = createTestAppContext();
     context.codex.createSessionRuntime = async () =>
@@ -6035,7 +6434,7 @@ describe("command flow", () => {
     await waitForAuditRows(context, 2);
     sendCommand(ws, { type: "session.sendText", requestId: "r-send", sessionId: "thread-failed", clientMessageId: "m-send", text: secretText });
     await waitForAuditRows(context, 3);
-    sendCommand(ws, { type: "session.steer", requestId: "r-steer", sessionId: "thread-failed", text: secretText });
+    sendCommand(ws, { type: "session.steer", requestId: "r-steer", sessionId: "thread-failed", clientMessageId: "m-steer", text: secretText });
     await waitForAuditRows(context, 4);
     sendCommand(ws, { type: "session.interrupt", requestId: "r-interrupt", sessionId: "thread-failed" });
     await waitForAuditRows(context, 5);

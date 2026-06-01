@@ -30,8 +30,8 @@ const CLIENT_DISCOVERY_TIMEOUT_MS = 2_000;
 
 type IpcMessage = Record<string, unknown>;
 type CodexTurnInputSource =
-  | { text: string; inputItems?: CodexTurnInputItem[] }
-  | { text?: string; inputItems: CodexTurnInputItem[] };
+  | { text: string; inputItems?: CodexTurnInputItem[]; clientUserMessageId?: string }
+  | { text?: string; inputItems: CodexTurnInputItem[]; clientUserMessageId?: string };
 
 interface IpcClientRecord {
   id: string;
@@ -575,6 +575,7 @@ export async function createCodexDesktopFollowerBridge(
         conversationId: input.threadId,
         turnStartParams: {
           threadId: input.threadId,
+          ...(input.clientUserMessageId && input.clientUserMessageId.length > 0 ? { clientUserMessageId: input.clientUserMessageId } : {}),
           input: inputItemsFromTextOrItems(input)
         }
       }, targetFor(input.threadId));
@@ -584,6 +585,7 @@ export async function createCodexDesktopFollowerBridge(
         conversationId: input.threadId,
         turnId: input.turnId,
         expectedTurnId: input.turnId,
+        ...(input.clientUserMessageId && input.clientUserMessageId.length > 0 ? { clientUserMessageId: input.clientUserMessageId } : {}),
         input: inputItemsFromTextOrItems(input)
       }, targetFor(input.threadId));
     },

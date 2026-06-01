@@ -150,7 +150,7 @@ describe("codex ipc bridge", () => {
       ]);
     });
 
-    const response = await bridge?.startTurn({ threadId: "thread-desktop", text: "来自移动端" });
+    const response = await bridge?.startTurn({ threadId: "thread-desktop", text: "来自移动端", clientUserMessageId: "client-start-1" });
 
     expect(response).toEqual(expect.objectContaining({
       resultType: "success",
@@ -162,6 +162,7 @@ describe("codex ipc bridge", () => {
         conversationId: "thread-desktop",
         turnStartParams: expect.objectContaining({
           threadId: "thread-desktop",
+          clientUserMessageId: "client-start-1",
           input: [{ type: "text", text: "来自移动端", text_elements: [] }]
         })
       })
@@ -226,6 +227,7 @@ describe("codex ipc bridge", () => {
 
     await bridge?.startTurn({
       threadId: "thread-desktop-image",
+      clientUserMessageId: "client-start-image",
       inputItems: [
         { type: "text", text: "看图", text_elements: [] },
         { type: "localImage", path: "/tmp/pixel.png" },
@@ -235,6 +237,7 @@ describe("codex ipc bridge", () => {
     await bridge?.steerTurn({
       threadId: "thread-desktop-image",
       turnId: "turn-from-desktop-owner",
+      clientUserMessageId: "client-steer-image",
       inputItems: [
         { type: "text", text: "补充图片", text_elements: [] },
         { type: "localImage", path: "/tmp/pixel-2.png" },
@@ -248,6 +251,7 @@ describe("codex ipc bridge", () => {
         params: expect.objectContaining({
           conversationId: "thread-desktop-image",
           turnStartParams: expect.objectContaining({
+            clientUserMessageId: "client-start-image",
             input: [
               { type: "text", text: "看图", text_elements: [] },
               { type: "localImage", path: "/tmp/pixel.png" },
@@ -260,12 +264,55 @@ describe("codex ipc bridge", () => {
         method: "thread-follower-steer-turn",
         params: expect.objectContaining({
           conversationId: "thread-desktop-image",
+          clientUserMessageId: "client-steer-image",
           input: [
             { type: "text", text: "补充图片", text_elements: [] },
             { type: "localImage", path: "/tmp/pixel-2.png" },
             { type: "mention", name: "notes-2.md", path: "/tmp/notes-2.md" }
           ]
         })
+      }
+    ]);
+
+    bridge?.stop();
+    owner.close();
+    await router.stop();
+  });
+
+  it("forwards startup interrupt requests with an empty turn id", async () => {
+    const socketPath = path.join(os.tmpdir(), `code-codex-ipc-${process.pid}-${Date.now()}-interrupt-follower.sock`);
+    const router = await startCodexIpcRouter(socketPath);
+    const ownerRequests: unknown[] = [];
+    const owner = await createCodexIpcClient({
+      socketPath,
+      clientType: "codex-desktop-owner",
+      requestHandlers: {
+        "thread-follower-interrupt-turn": {
+          canHandle: async (params) => params.conversationId === "thread-desktop-startup",
+          handle: async (request) => {
+            ownerRequests.push(request.params);
+            return { ok: true };
+          }
+        }
+      }
+    });
+    const bridge = await createCodexDesktopFollowerBridge({
+      socketPath,
+      onConversationStateChanged: () => undefined
+    });
+    expect(bridge).not.toBeNull();
+
+    const response = await bridge?.interruptTurn({ threadId: "thread-desktop-startup", turnId: "" });
+
+    expect(response).toEqual(expect.objectContaining({
+      resultType: "success",
+      method: "thread-follower-interrupt-turn",
+      result: { ok: true }
+    }));
+    expect(ownerRequests).toEqual([
+      {
+        conversationId: "thread-desktop-startup",
+        turnId: ""
       }
     ]);
 

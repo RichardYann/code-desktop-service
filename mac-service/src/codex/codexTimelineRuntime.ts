@@ -703,6 +703,14 @@ function emptyItem(input: { id: string; sessionId: string; turnId: string; kind:
   };
 }
 
+function userClientMessageId(record: Record<string, unknown>): string | null {
+  const clientMessageId = stringField(record, "clientMessageId") ||
+    stringField(record, "clientUserMessageId") ||
+    stringField(record, "clientId") ||
+    stringField(record, "client_id");
+  return clientMessageId.length > 0 ? clientMessageId : null;
+}
+
 function itemStartedAt(params: Record<string, unknown>): string {
   return timestampField(params, "startedAtMs") || timestampField(params, "createdAtMs") || "";
 }
@@ -714,6 +722,9 @@ function itemCompletedAt(params: Record<string, unknown>): string {
 function textFromItemRecord(itemRecord: Record<string, unknown>, kind: TimelineItemKind): string {
   if (kind === "error") return diagnosticTextFromValue(itemRecord) || diagnosticTextFromValue(itemRecord.error);
   if (kind === "toolProgress") return toolTextFromItem(itemRecord);
+  if (kind === "imageGeneration") {
+    return firstStringField(itemRecord, ["revisedPrompt", "revised_prompt", "prompt", "text", "message", "summary"]);
+  }
   return stringField(itemRecord, "text") ||
     stringField(itemRecord, "message") ||
     stringField(itemRecord, "summary") ||
@@ -729,9 +740,40 @@ function titleFromItemRecord(itemRecord: Record<string, unknown>, kind: Timeline
   }
   if (kind === "fileChange" || kind === "diffOverview") return "文件修改";
   if (kind === "plan") return "计划";
+  if (kind === "imageGeneration") return stringField(itemRecord, "title") || "imagegen";
   if (kind === "contextCompaction") return "上下文压缩";
   if (kind === "error") return "错误";
   return stringField(itemRecord, "title");
+}
+
+function assetIdsFromItemRecord(itemRecord: Record<string, unknown>): string[] {
+  const result: string[] = [];
+  appendAssetId(result, stringField(itemRecord, "assetId"));
+  appendAssetId(result, stringField(itemRecord, "mediaAssetId"));
+  appendAssetId(result, stringField(itemRecord, "artifactAssetId"));
+  appendAssetIdsFromArray(result, itemRecord.assetIds);
+  appendAssetIdsFromArray(result, itemRecord.assets);
+  appendAssetIdsFromArray(result, itemRecord.mediaAssets);
+  appendAssetIdsFromArray(result, itemRecord.artifacts);
+  const asset = asRecord(itemRecord.asset);
+  appendAssetId(result, stringField(asset, "id"));
+  return result;
+}
+
+function appendAssetIdsFromArray(result: string[], value: unknown): void {
+  for (const item of asArray(value)) {
+    if (typeof item === "string") {
+      appendAssetId(result, item);
+      continue;
+    }
+    const record = asRecord(item);
+    appendAssetId(result, firstStringField(record, ["id", "assetId", "mediaAssetId"]));
+  }
+}
+
+function appendAssetId(result: string[], assetId: string): void {
+  if (assetId.length === 0 || result.includes(assetId)) return;
+  result.push(assetId);
 }
 
 function commandStatus(status: TimelineItemStatus): CommandSummary["status"] {
@@ -873,6 +915,7 @@ export class CodexTimelineRuntime {
   private items = new Map<string, TimelineItem>();
   private approvalSessionIds = new Map<string, string>();
   private terminalInputBuffers = new Map<string, string>();
+  private turnClientMessageIds = new Map<string, string>();
 
   applyNotification(method: string, params: Record<string, unknown>): TimelineRuntimeEvent[] {
     if (method === "remoteControl/status/changed") return [this.remoteStatusEvent(params)];
@@ -915,6 +958,21 @@ export class CodexTimelineRuntime {
   }
   private turnKey(sessionId: string, turnId: string): string {
     return `${sessionId}:${turnId}`;
+  }
+
+  private clientMessageIdFromTurnParams(params: Record<string, unknown>): string | null {
+    const turn = asRecord(params.turn);
+    return userClientMessageId(turn) ?? userClientMessageId(params);
+  }
+
+  private rememberTurnClientMessageId(sessionId: string, turnId: string, params: Record<string, unknown>): void {
+    const clientMessageId = this.clientMessageIdFromTurnParams(params);
+    if (clientMessageId === null) return;
+    this.turnClientMessageIds.set(this.turnKey(sessionId, turnId), clientMessageId);
+  }
+
+  private clientMessageIdForTurn(sessionId: string, turnId: string): string | null {
+    return this.turnClientMessageIds.get(this.turnKey(sessionId, turnId)) ?? null;
   }
 
   private itemKey(sessionId: string, turnId: string, itemId: string): string {
@@ -965,6 +1023,7 @@ export class CodexTimelineRuntime {
     const sessionId = sessionIdFromParams(params);
     const turn = asRecord(params.turn);
     const turnId = turnIdFromParams(params);
+    this.rememberTurnClientMessageId(sessionId, turnId, params);
     const nextTurn = this.ensureTurn(sessionId, turnId, normalizeTurnStatus(turn.status) === "idle" ? fallback : normalizeTurnStatus(turn.status));
     nextTurn.itemsView = normalizeItemsView(turn.itemsView);
     nextTurn.durationMs = numberOrNull(turn.durationMs);
@@ -1060,6 +1119,8 @@ export class CodexTimelineRuntime {
     if (kind === "agentMessage") {
       const phase = messagePhase(itemRecord.phase);
       if (phase) item.phase = phase;
+    } else if (kind === "userMessage") {
+      item.clientMessageId = userClientMessageId(itemRecord) ?? userClientMessageId(params) ?? this.clientMessageIdForTurn(sessionId, turnId);
     }
     if (kind === "commandExecution") {
       const command = stringField(itemRecord, "command") || text || "command";
@@ -1067,6 +1128,8 @@ export class CodexTimelineRuntime {
       item.command.title = titleFromItemRecord(itemRecord, kind);
     } else if (kind === "fileChange") {
       item.diff = diffOverviewFromFiles(itemRecord.files) ?? diffOverviewFromFileChanges(itemRecord.changes);
+    } else if (kind === "imageGeneration") {
+      item.assetIds = assetIdsFromItemRecord(itemRecord);
     }
     return { type: "timeline.item.started", item };
   }
@@ -1261,7 +1324,15 @@ export class CodexTimelineRuntime {
     item.isStreaming = false;
     const completedAt = itemCompletedAt(params);
     if (completedAt.length > 0) item.updatedAt = completedAt;
-    if (item.kind === "commandExecution") {
+    if (item.kind === "userMessage") {
+      item.clientMessageId = userClientMessageId(itemRecord) ?? userClientMessageId(params) ?? this.clientMessageIdForTurn(item.sessionId, item.turnId) ?? item.clientMessageId;
+      const text = textFromItemRecord(itemRecord, item.kind);
+      if (text.length > 0) {
+        item.text = text;
+        item.rawText = text;
+      }
+      item.title = titleFromItemRecord(itemRecord, item.kind);
+    } else if (item.kind === "commandExecution") {
       const command = stringField(itemRecord, "command") || item.command?.command || item.text || "command";
       item.command = commandSummary({ id: item.id, turnId: item.turnId, command, status: commandStatus(item.status), output: item.command?.rawOutput ?? item.rawText, exitCode: numberOrNull(itemRecord.exitCode) });
       item.command.title = titleFromItemRecord(itemRecord, item.kind);
@@ -1274,6 +1345,14 @@ export class CodexTimelineRuntime {
       item.title = toolTitleFromItem(itemRecord);
       item.text = toolTextFromItem(itemRecord) || item.text;
       item.rawText = item.text;
+    } else if (item.kind === "imageGeneration") {
+      item.title = titleFromItemRecord(itemRecord, item.kind);
+      const text = textFromItemRecord(itemRecord, item.kind);
+      if (text.length > 0) {
+        item.text = text;
+        item.rawText = text;
+      }
+      item.assetIds = assetIdsFromItemRecord(itemRecord);
     } else if (item.kind === "error") {
       const text = textFromItemRecord(itemRecord, item.kind) || item.text || "Codex 运行出错";
       item.title = "错误";

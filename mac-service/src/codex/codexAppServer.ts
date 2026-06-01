@@ -29,15 +29,45 @@ export async function startCodexAppServer(codexBin: string, mode: "app-server" |
   };
 }
 
-function createStdioTransport(child: ReturnType<typeof execa>): AppServerTransport {
-  if (!child.stdin || !child.stdout) {
+interface StdioWritableLike {
+  destroyed?: boolean;
+  writableEnded?: boolean;
+  write(chunk: string): unknown;
+  end(): void;
+  on?(event: "error", handler: (error: Error) => void): unknown;
+}
+
+interface StdioReadableLike {
+  on(event: "data", handler: (data: Buffer | string) => void): unknown;
+}
+
+interface StdioChildLike {
+  stdin?: StdioWritableLike | null;
+  stdout?: StdioReadableLike | null;
+  on?(event: "exit" | "error" | "close", handler: () => void): unknown;
+}
+
+function createStdioTransport(child: StdioChildLike): AppServerTransport {
+  const stdin = child.stdin;
+  const stdout = child.stdout;
+  if (!stdin || !stdout) {
     throw new Error("Codex App Server stdio transport is unavailable");
   }
 
   let onMessageHandler: ((chunk: string) => void) | null = null;
   let buffer = "";
+  let closed = false;
 
-  child.stdout.on("data", (data) => {
+  const markClosed = () => {
+    closed = true;
+  };
+
+  child.on?.("exit", markClosed);
+  child.on?.("error", markClosed);
+  child.on?.("close", markClosed);
+  stdin.on?.("error", markClosed);
+
+  stdout.on("data", (data) => {
     buffer += data.toString("utf8");
     const parts = buffer.split("\n");
     buffer = parts.pop() ?? "";
@@ -48,15 +78,25 @@ function createStdioTransport(child: ReturnType<typeof execa>): AppServerTranspo
 
   return {
     send(chunk: string): void {
-      child.stdin?.write(`${chunk}\n`);
+      if (closed || stdin.destroyed === true || stdin.writableEnded === true) {
+        throw new Error("Codex App Server stdio transport is closed");
+      }
+      stdin.write(`${chunk}\n`);
     },
     onMessage(handler: (chunk: string) => void): void {
       onMessageHandler = handler;
     },
     close(): void {
-      child.stdin?.end();
+      closed = true;
+      if (stdin.destroyed !== true && stdin.writableEnded !== true) {
+        stdin.end();
+      }
     }
   };
+}
+
+export function createStdioTransportForTest(child: StdioChildLike): AppServerTransport {
+  return createStdioTransport(child);
 }
 
 export function createUnixSocketTransport(endpoint: string): AppServerTransport {

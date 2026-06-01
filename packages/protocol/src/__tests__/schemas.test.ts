@@ -327,6 +327,7 @@ describe("protocol schemas", () => {
       type: "session.steer",
       requestId: "req-2",
       sessionId: "session-1",
+      clientMessageId: "client-steer-1",
       text: "先停下，改用保守方案"
     }).type).toBe("session.steer");
 
@@ -337,11 +338,46 @@ describe("protocol schemas", () => {
     });
     expect(command.type).toBe("session.context.compact");
 
-    expect(ClientCommandSchema.parse({
+    const interrupt = ClientCommandSchema.parse({
       type: "session.interrupt",
       requestId: "req-3",
-      sessionId: "session-1"
-    }).type).toBe("session.interrupt");
+      sessionId: "session-1",
+      turnId: "turn-1"
+    });
+    expect(interrupt.type).toBe("session.interrupt");
+    if (interrupt.type === "session.interrupt") {
+      expect(interrupt.turnId).toBe("turn-1");
+    }
+
+    const startupInterrupt = ClientCommandSchema.parse({
+      type: "session.interrupt",
+      requestId: "req-startup-interrupt",
+      sessionId: "session-1",
+      targetKind: "startup"
+    });
+    expect(startupInterrupt.type).toBe("session.interrupt");
+    if (startupInterrupt.type === "session.interrupt") {
+      expect(startupInterrupt.targetKind).toBe("startup");
+      expect(startupInterrupt.turnId).toBeUndefined();
+    }
+  });
+
+  it("rejects empty client message ids for commands that must be anchored", () => {
+    expect(() => ClientCommandSchema.parse({
+      type: "session.sendText",
+      requestId: "req-empty-send",
+      sessionId: "session-1",
+      clientMessageId: "",
+      text: "hello"
+    })).toThrow();
+
+    expect(() => ClientCommandSchema.parse({
+      type: "session.steer",
+      requestId: "req-empty-steer",
+      sessionId: "session-1",
+      clientMessageId: "",
+      text: "hello"
+    })).toThrow();
   });
 
   it("parses installed capability and input queue protocol", () => {
@@ -353,6 +389,7 @@ describe("protocol schemas", () => {
     const created = ClientCommandSchema.parse({
       type: "session.create",
       requestId: "create-guided",
+      clientMessageId: "client-create-guided-1",
       toolId: "codex",
       projectPath: "/repo/code",
       text: "按这个方向新建会话",
@@ -363,6 +400,7 @@ describe("protocol schemas", () => {
     });
     expect(created.type).toBe("session.create");
     if (created.type === "session.create") {
+      expect(created.clientMessageId).toBe("client-create-guided-1");
       expect(created.guidance?.mode).toBe("guided");
     }
 
@@ -386,6 +424,7 @@ describe("protocol schemas", () => {
       type: "session.steer",
       requestId: "steer-guided",
       sessionId: "thread-1",
+      clientMessageId: "client-steer-guided-1",
       text: "立即改用保守方案",
       guidance: {
         mode: "steer-now",
@@ -394,6 +433,7 @@ describe("protocol schemas", () => {
     });
     expect(steered.type).toBe("session.steer");
     if (steered.type === "session.steer") {
+      expect(steered.clientMessageId).toBe("client-steer-guided-1");
       expect(steered.guidance?.mode).toBe("steer-now");
     }
 
@@ -965,7 +1005,7 @@ describe("protocol schemas", () => {
     expect(parsedDiffEvent.diff.files[0].patch).toContain("+new");
   });
 
-  it("accepts a thread detail snapshot with streaming timeline items", () => {
+  it("accepts a thread detail snapshot with streaming timeline items and client message ids", () => {
     const parsed = ServerEventSchema.parse({
       type: "thread.detail.snapshot",
       sessionId: "session-1",
@@ -981,6 +1021,7 @@ describe("protocol schemas", () => {
               id: "item-1",
               sessionId: "session-1",
               turnId: "turn-1",
+              clientMessageId: "client-user-1",
               kind: "agentMessage",
               status: "running",
               title: "",
@@ -1002,6 +1043,10 @@ describe("protocol schemas", () => {
     });
 
     expect(parsed.type).toBe("thread.detail.snapshot");
+    if (parsed.type !== "thread.detail.snapshot") {
+      throw new Error("expected thread detail snapshot");
+    }
+    expect(parsed.turns[0].items[0].clientMessageId).toBe("client-user-1");
   });
 
   it("accepts timeline command updates and remote-control status updates", () => {

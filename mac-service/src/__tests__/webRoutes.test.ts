@@ -98,9 +98,10 @@ describe("web management routes", () => {
     expect(response.body).toContain("project-roots");
     expect(response.body).toContain("choose-project-root");
     expect(response.body).toContain("选择文件夹");
-    expect(response.body).not.toContain("project-root-path");
-    expect(response.body).not.toContain("add-project-root");
-    expect(response.body).not.toContain("手动添加");
+    expect(response.body).toContain("manual-project-root-path");
+    expect(response.body).toContain("add-project-root-path");
+    expect(response.body).toContain("添加路径");
+    expect(response.body).toContain("C:\\\\Users\\\\52960\\\\Documents\\\\Codex");
     expect(response.body).toContain("项目根目录只用于移动端新建项目和创建新会话");
     expect(response.body).toContain('id="paired-devices" class="card-body device-list bounded-list"');
     expect(response.body).toContain('id="recent-media-assets" class="audit-list bounded-list"');
@@ -180,6 +181,30 @@ describe("web management routes", () => {
     expect(response.body).toContain("项目根目录在桌面端不存在");
   });
 
+  it("adds a Windows project root through the manual project-root API", async () => {
+    const windowsRoot = "C:\\Users\\52960\\Documents\\Codex";
+    const statSpy = vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true } as fs.Stats);
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    try {
+      server = await createServer(createTestAppContext());
+
+      const response = await server.inject({
+        method: "POST",
+        url: "/api/project-roots",
+        headers: { "content-type": "application/json" },
+        payload: { path: windowsRoot }
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as { ok: boolean; roots: Array<{ path: string }> };
+      expect(body.ok).toBe(true);
+      expect(body.roots.some((root) => root.path.includes(windowsRoot))).toBe(true);
+    } finally {
+      statSpy.mockRestore();
+      accessSpy.mockRestore();
+    }
+  });
+
   it("adds project roots through a Finder directory picker route", async () => {
     const dynamicRoot = fs.mkdtempSync(path.join(os.tmpdir(), "code-finder-root-"));
     server = await createServer(createTestAppContext(), {
@@ -223,6 +248,28 @@ describe("web management routes", () => {
     expect(body).toEqual({ ok: false, cancelled: true, roots: [] });
   });
 
+  it("returns a structured unsupported result when the project-root picker is unavailable", async () => {
+    server = await createServer(createTestAppContext(), {
+      chooseProjectRoot: async () => {
+        throw new Error("当前平台不支持访达目录选择器");
+      }
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/project-roots/choose"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: false,
+      cancelled: false,
+      unsupported: true,
+      message: "当前平台不支持系统目录选择器，请手动输入项目根目录路径。",
+      roots: []
+    });
+  });
+
   it("reads and toggles desktop service startup from the web management API", async () => {
     const launchAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "code-web-startup-"));
     const context = createTestAppContext({ launchAgentDir });
@@ -233,7 +280,7 @@ describe("web management routes", () => {
     expect(initial.json()).toMatchObject({
       supported: true,
       enabled: false,
-      label: "com.lyz1022.code.mac-service"
+      label: "com.liuyongzhe.code.mac-service"
     });
 
     const enable = await server.inject({
@@ -557,7 +604,7 @@ describe("web management routes", () => {
       attributes: Record<string, string> = {};
       dataset: Record<string, string> = {};
       children: FakeElement[] = [];
-      listeners = new Map<string, Array<() => void>>();
+      listeners = new Map<string, Array<(event?: { key?: string; preventDefault?: () => void }) => void>>();
       private classes = new Set<string>();
       classList = {
         add: (name: string) => {
@@ -583,7 +630,7 @@ describe("web management routes", () => {
 
       constructor(readonly id = "") {}
 
-      addEventListener(type: string, listener: () => void) {
+      addEventListener(type: string, listener: (event?: { key?: string; preventDefault?: () => void }) => void) {
         const listeners = this.listeners.get(type) ?? [];
         listeners.push(listener);
         this.listeners.set(type, listeners);
@@ -611,18 +658,26 @@ describe("web management routes", () => {
       click() {
         for (const listener of this.listeners.get("click") ?? []) listener();
       }
+
+      dispatch(type: string, event?: { key?: string; preventDefault?: () => void }) {
+        for (const listener of this.listeners.get(type) ?? []) listener(event);
+      }
     }
 
     class FakeButtonElement extends FakeElement {}
+    class FakeInputElement extends FakeElement {
+      value = "";
+    }
     class FakeImageElement extends FakeElement {}
 
     const elements = new Map<string, FakeElement>();
-    const buttonIds = new Set(["refresh-page", "create-pairing", "copy-code", "clear-media-assets", "choose-project-root", "startup-toggle", "trust-certificate"]);
+    const buttonIds = new Set(["refresh-page", "create-pairing", "copy-code", "clear-media-assets", "choose-project-root", "add-project-root-path", "startup-toggle", "trust-certificate"]);
+    const inputIds = new Set(["manual-project-root-path"]);
     const getElement = (id: string): FakeElement => {
       const existing = elements.get(id);
       if (existing) return existing;
       const element =
-        id === "pairing-qr" ? new FakeImageElement(id) : buttonIds.has(id) ? new FakeButtonElement(id) : new FakeElement(id);
+        id === "pairing-qr" ? new FakeImageElement(id) : buttonIds.has(id) ? new FakeButtonElement(id) : inputIds.has(id) ? new FakeInputElement(id) : new FakeElement(id);
       elements.set(id, element);
       return element;
     };
@@ -638,9 +693,24 @@ describe("web management routes", () => {
       status: 200,
       statusText: "OK",
       json: async () => {
+        if (url === "/api/project-roots" && options?.method === "POST") {
+          const rootPath = JSON.parse(options.body || "{}").path;
+          return {
+            ok: true,
+            roots: [{
+              id: "root-win",
+              name: "Codex",
+              path: rootPath,
+              isAvailable: true,
+              isWritable: true,
+              lastCheckedAt: "2026-05-16T00:00:00.000Z",
+              errorMessage: ""
+            }]
+          };
+        }
         if (url === "/api/startup" && options?.method === "PUT") {
           startupEnabled = Boolean(JSON.parse(options.body || "{}").enabled);
-          return { supported: true, enabled: startupEnabled, label: "com.lyz1022.code.mac-service" };
+          return { supported: true, enabled: startupEnabled, label: "com.liuyongzhe.code.mac-service" };
         }
         if (url === "/api/health") {
           return {
@@ -693,7 +763,7 @@ describe("web management routes", () => {
         if (url === "/api/audit-logs") return { logs: [] };
         if (url === "/api/media-assets") return { totalSizeBytes: 0, assets: [] };
         if (url === "/api/local-web-sessions") return { sessions: [] };
-        if (url === "/api/startup") return { supported: true, enabled: startupEnabled, label: "com.lyz1022.code.mac-service" };
+        if (url === "/api/startup") return { supported: true, enabled: startupEnabled, label: "com.liuyongzhe.code.mac-service" };
         if (url === "/api/pairing-ticket") {
           return {
             value: "123456",
@@ -713,6 +783,7 @@ describe("web management routes", () => {
       Error,
       HTMLButtonElement: FakeButtonElement,
       HTMLImageElement: FakeImageElement,
+      HTMLInputElement: FakeInputElement,
       URL,
       document: {
         createElement: () => new FakeElement(),
@@ -743,6 +814,34 @@ describe("web management routes", () => {
     expect(elements.get("startup-toggle")?.dataset.enabled).toBe("false");
     expect(elements.get("startup-toggle")?.attributes["aria-checked"]).toBe("false");
     expect(elements.get("startup-status")?.textContent).toBe("已关闭");
+
+    const manualProjectRootInput = elements.get("manual-project-root-path") as FakeInputElement;
+    manualProjectRootInput.value = "C:\\Users\\52960\\Documents\\Codex";
+    elements.get("add-project-root-path")?.click();
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.resolve();
+    }
+
+    expect(fetch).toHaveBeenCalledWith("/api/project-roots", expect.objectContaining({
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "C:\\Users\\52960\\Documents\\Codex" })
+    }));
+    expect(manualProjectRootInput.value).toBe("");
+    expect(elements.get("project-root-status")?.textContent).toBe("项目根目录已保存，移动端刷新项目后可选择该根目录创建项目或新会话。");
+
+    const preventDefault = vi.fn();
+    manualProjectRootInput.value = "D:\\Code";
+    manualProjectRootInput.dispatch("keydown", { key: "Enter", preventDefault });
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.resolve();
+    }
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledWith("/api/project-roots", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ path: "D:\\Code" })
+    }));
 
     elements.get("startup-toggle")?.click();
     for (let index = 0; index < 20; index += 1) {
@@ -914,7 +1013,7 @@ describe("web management routes", () => {
         if (url === "/api/project-roots") return { roots: [] };
         if (url === "/api/audit-logs") return { logs: [] };
         if (url === "/api/local-web-sessions") return { sessions: [] };
-        if (url === "/api/startup") return { supported: true, enabled: false, label: "com.lyz1022.code.mac-service" };
+        if (url === "/api/startup") return { supported: true, enabled: false, label: "com.liuyongzhe.code.mac-service" };
         if (url === "/api/media-assets" && options?.method !== "DELETE") {
           return {
             totalSizeBytes: 8,
