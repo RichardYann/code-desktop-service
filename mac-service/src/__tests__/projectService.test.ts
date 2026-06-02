@@ -71,6 +71,33 @@ describe("project service", () => {
     expect(() => service.createProject({ rootId, projectName: "a".repeat(65) })).toThrow("项目名不能超过 64 个字符");
   });
 
+  it("rejects Windows-unsafe project names before creating folders", () => {
+    const { rootA, service } = createFixture();
+    const rootId = service.listRoots()[0].id;
+
+    expect(() => service.createProject({ rootId, projectName: "bad<name" })).toThrow("项目名不能包含 Windows 保留字符");
+    expect(() => service.createProject({ rootId, projectName: "bad>name" })).toThrow("项目名不能包含 Windows 保留字符");
+    expect(() => service.createProject({ rootId, projectName: "bad\"name" })).toThrow("项目名不能包含 Windows 保留字符");
+    expect(() => service.createProject({ rootId, projectName: "bad|name" })).toThrow("项目名不能包含 Windows 保留字符");
+    expect(() => service.createProject({ rootId, projectName: "bad?name" })).toThrow("项目名不能包含 Windows 保留字符");
+    expect(() => service.createProject({ rootId, projectName: "bad*name" })).toThrow("项目名不能包含 Windows 保留字符");
+    expect(() => service.createProject({ rootId, projectName: "Project." })).toThrow("项目名不能以空格或 . 结尾");
+    expect(() => service.createProject({ rootId, projectName: "Project. " })).toThrow("项目名不能以空格或 . 结尾");
+    expect(() => service.createProject({ rootId, projectName: "CON" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "PRN" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "AUX" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "NUL" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "CONIN$" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "CONOUT$" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "con.txt" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "COM9" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "LPT9" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "COM1.log" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(() => service.createProject({ rootId, projectName: "LPT1.log" })).toThrow("项目名不能使用 Windows 保留设备名");
+    expect(fs.existsSync(path.join(rootA, "bad<name"))).toBe(false);
+    expect(fs.existsSync(path.join(rootA, "CON"))).toBe(false);
+  });
+
   it("rejects duplicate project names without overwriting", () => {
     const { rootA, service } = createFixture();
     const rootId = service.listRoots()[0].id;

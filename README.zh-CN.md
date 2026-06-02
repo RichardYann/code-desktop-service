@@ -110,6 +110,8 @@ C:\Users\<you>\Documents\Codex\code-data\start-code-desktop-service.ps1
 
 服务在 Windows 上启动后，管理页的“选择文件夹”项目根目录入口会打开 Windows 系统文件夹选择器。如果当前桌面会话无法弹出窗口，可以继续使用手动路径输入作为兜底。
 
+移动端通过 Windows 项目根目录新建项目时，服务端会在创建文件夹前校验项目名。包含 Windows 保留字符（`< > " | ? *`）、以 `.` 结尾，或使用 `CON`、`PRN`、`AUX`、`NUL`、`CONIN$`、`CONOUT$`、`COM1`-`COM9`、`LPT1`-`LPT9` 等保留设备名的项目名会被拒绝；`con.txt` 这类带扩展名的保留设备名也会被拒绝。
+
 安装依赖：
 
 ```bash

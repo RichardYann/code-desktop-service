@@ -75,6 +75,22 @@ function pathInsideRoot(candidatePath: string, rootPath: string): boolean {
   return relative.length === 0 || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function hasWindowsReservedProjectNameCharacter(value: string): boolean {
+  return /[<>"|?*]/.test(value);
+}
+
+function isWindowsReservedDeviceName(value: string): boolean {
+  const baseName = value.split(".")[0].toLowerCase();
+  return baseName === "con" ||
+    baseName === "prn" ||
+    baseName === "aux" ||
+    baseName === "nul" ||
+    baseName === "conin$" ||
+    baseName === "conout$" ||
+    /^com[1-9]$/.test(baseName) ||
+    /^lpt[1-9]$/.test(baseName);
+}
+
 function validateProjectName(input: string): string {
   const name = input.trim();
   if (name.length === 0) {
@@ -86,6 +102,9 @@ function validateProjectName(input: string): string {
   if (name.includes("/") || name.includes("\\") || name.includes(":")) {
     throw new Error("项目名不能包含路径分隔符");
   }
+  if (hasWindowsReservedProjectNameCharacter(name)) {
+    throw new Error("项目名不能包含 Windows 保留字符");
+  }
   if (/[\x00-\x1F]/.test(name)) {
     throw new Error("项目名不能包含控制字符");
   }
@@ -94,6 +113,12 @@ function validateProjectName(input: string): string {
   }
   if (name.startsWith(".")) {
     throw new Error("项目名不能以 . 开头");
+  }
+  if (name.endsWith(" ") || name.endsWith(".")) {
+    throw new Error("项目名不能以空格或 . 结尾");
+  }
+  if (isWindowsReservedDeviceName(name)) {
+    throw new Error("项目名不能使用 Windows 保留设备名");
   }
   return name;
 }

@@ -110,6 +110,8 @@ This script does not silently install the local CA into the Windows Root store a
 
 After the service is running on Windows, the management page's `Choose Folder` project-root action opens the Windows system folder picker. If the current desktop session cannot show a dialog, use the manual project-root path input as a fallback.
 
+When a paired mobile client creates a project under a Windows project root, the service validates the project name before folder creation. Names containing Windows reserved characters (`< > " | ? *`), ending with `.`, or using reserved device names such as `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1`-`COM9`, or `LPT1`-`LPT9` are rejected, including reserved names with extensions like `con.txt`.
+
 Install dependencies:
 
 ```bash
