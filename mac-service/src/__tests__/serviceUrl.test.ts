@@ -31,6 +31,27 @@ describe("service url resolver", () => {
     expect(serviceUrl).toBe("https://192.168.2.27:37631");
   });
 
+  it("prefers physical Windows LAN interfaces over virtual adapter addresses for QR pairing", () => {
+    const input = {
+      bindHost: "0.0.0.0",
+      hostHeader: "127.0.0.1:37631",
+      hostname: "127.0.0.1",
+      port: 37631,
+      localHostname: "windows-pc",
+      networkInterfaces: {
+        "vEthernet (Default Switch)": [{ address: "192.168.6.1", family: "IPv4", internal: false }],
+        "Wi-Fi": [{ address: "192.168.2.31", family: "IPv4", internal: false }]
+      }
+    };
+
+    expect(createServiceUrl(input)).toBe("https://192.168.2.31:37631");
+    expect(createServiceUrlCandidates(input)).toEqual([
+      "https://192.168.2.31:37631",
+      "https://windows-pc.local:37631",
+      "https://192.168.6.1:37631"
+    ]);
+  });
+
   it("includes stable local host and LAN candidates for IP changes", () => {
     const candidates = createServiceUrlCandidates({
       bindHost: "0.0.0.0",

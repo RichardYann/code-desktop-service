@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import os from "node:os";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestAppContext } from "./helpers.js";
 import { createServer } from "../server/httpServer.js";
 
@@ -7,6 +8,7 @@ describe("pairing routes", () => {
 
   afterEach(async () => {
     await server?.close();
+    vi.restoreAllMocks();
   });
 
   it("claims a pairing ticket and rejects token after revoke", async () => {
@@ -109,6 +111,46 @@ describe("pairing routes", () => {
     expect(qrPayload.tlsPublicKeyHash).toBe(context.transport.publicKeyHash);
     expect(qrPayload.candidateServiceUrls).toContain(ticketBody.serviceUrl);
     expect(qrPayload.candidateServiceUrls.some((url) => url.endsWith(".local:37631"))).toBe(true);
+  });
+
+  it("uses a physical Windows LAN address in QR pairing payloads when a virtual adapter is listed first", async () => {
+    vi.spyOn(os, "hostname").mockReturnValue("windows-pc");
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      "vEthernet (Default Switch)": [
+        {
+          address: "192.168.6.1",
+          family: "IPv4",
+          internal: false,
+          netmask: "255.255.255.0",
+          mac: "00:00:00:00:00:01",
+          cidr: "192.168.6.1/24"
+        }
+      ],
+      "Wi-Fi": [
+        {
+          address: "192.168.2.31",
+          family: "IPv4",
+          internal: false,
+          netmask: "255.255.255.0",
+          mac: "00:00:00:00:00:02",
+          cidr: "192.168.2.31/24"
+        }
+      ]
+    } as ReturnType<typeof os.networkInterfaces>);
+    const context = createTestAppContext({ host: "0.0.0.0" });
+    server = await createServer(context);
+
+    const ticket = await server.inject({ method: "POST", url: "/api/pairing-ticket", headers: { host: "127.0.0.1:37631" } });
+    const ticketBody = ticket.json() as { qrPayload: string; serviceUrl: string };
+    const qrPayload = JSON.parse(ticketBody.qrPayload) as { serviceUrl: string; candidateServiceUrls: string[] };
+
+    expect(ticketBody.serviceUrl).toBe("https://192.168.2.31:37631");
+    expect(qrPayload.serviceUrl).toBe("https://192.168.2.31:37631");
+    expect(qrPayload.candidateServiceUrls).toEqual([
+      "https://192.168.2.31:37631",
+      "https://windows-pc.local:37631",
+      "https://192.168.6.1:37631"
+    ]);
   });
 
   it("uses the same stable desktop identity in health and QR pairing payloads", async () => {

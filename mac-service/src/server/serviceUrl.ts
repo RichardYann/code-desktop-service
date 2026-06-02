@@ -6,6 +6,13 @@ export interface NetworkInterfaceEntry {
   internal: boolean;
 }
 
+interface LanIpv4AddressCandidate {
+  address: string;
+  interfaceName: string;
+  order: number;
+  score: number;
+}
+
 export interface CreateServiceUrlInput {
   bindHost: string;
   hostHeader: string | undefined;
@@ -65,18 +72,100 @@ function isIpv4Entry(entry: NetworkInterfaceEntry): boolean {
   return entry.family === "IPv4" || entry.family === 4;
 }
 
-function findLanIpv4Addresses(networkInterfaces: NodeJS.Dict<NetworkInterfaceEntry[]>): string[] {
-  const result: string[] = [];
+function ipv4Octets(address: string): number[] | null {
+  const parts = address.split(".");
+  if (parts.length !== 4) {
+    return null;
+  }
+  const octets = parts.map((part) => Number(part));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return null;
+  }
+  return octets;
+}
+
+function isUsableLanIpv4Address(address: string): boolean {
+  const octets = ipv4Octets(address);
+  if (!octets) {
+    return false;
+  }
+  const first = octets[0];
+  const second = octets[1];
+  if (first === 0 || first === 127 || first >= 224) {
+    return false;
+  }
+  if (first === 169 && second === 254) {
+    return false;
+  }
+  return true;
+}
+
+function isPrivateIpv4Address(address: string): boolean {
+  const octets = ipv4Octets(address);
+  if (!octets) {
+    return false;
+  }
+  const first = octets[0];
+  const second = octets[1];
+  return first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168);
+}
+
+function isLikelyPhysicalInterface(interfaceName: string): boolean {
+  return /(^en\d+$|^eth\d+$|ethernet|wi-?fi|wireless|wlan|以太网|无线)/i.test(interfaceName);
+}
+
+function isLikelyVirtualInterface(interfaceName: string): boolean {
+  return /(virtual|vethernet|hyper-v|vmware|virtualbox|vbox|docker|wsl|vpn|tunnel|tap|tun|utun|tailscale|zerotier|bridge|br-|awdl|llw|bluetooth)/i.test(interfaceName);
+}
+
+function scoreLanIpv4Address(interfaceName: string, address: string): number {
+  let score = 0;
+  if (isPrivateIpv4Address(address)) {
+    score += 40;
+  }
+  if (isLikelyPhysicalInterface(interfaceName)) {
+    score += 80;
+  }
+  if (isLikelyVirtualInterface(interfaceName)) {
+    score -= 100;
+  }
+  if (address.endsWith(".1")) {
+    score -= 5;
+  }
+  return score;
+}
+
+function findLanIpv4AddressCandidates(networkInterfaces: NodeJS.Dict<NetworkInterfaceEntry[]>): LanIpv4AddressCandidate[] {
+  const result: LanIpv4AddressCandidate[] = [];
   const names = Object.keys(networkInterfaces);
+  let order = 0;
   for (const name of names) {
     const entries = networkInterfaces[name] ?? [];
     for (const entry of entries) {
-      if (!entry.internal && isIpv4Entry(entry) && entry.address.length > 0) {
-        result.push(entry.address);
+      if (!entry.internal && isIpv4Entry(entry) && isUsableLanIpv4Address(entry.address)) {
+        result.push({
+          address: entry.address,
+          interfaceName: name,
+          order,
+          score: scoreLanIpv4Address(name, entry.address)
+        });
+        order++;
       }
     }
   }
+  result.sort((left, right) => {
+    if (left.score !== right.score) {
+      return right.score - left.score;
+    }
+    return left.order - right.order;
+  });
   return result;
+}
+
+function findLanIpv4Addresses(networkInterfaces: NodeJS.Dict<NetworkInterfaceEntry[]>): string[] {
+  return findLanIpv4AddressCandidates(networkInterfaces).map((candidate) => candidate.address);
 }
 
 function findLanIpv4Address(networkInterfaces: NodeJS.Dict<NetworkInterfaceEntry[]>): string {
