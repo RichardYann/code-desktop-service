@@ -168,6 +168,13 @@ function findLanIpv4Addresses(networkInterfaces: NodeJS.Dict<NetworkInterfaceEnt
   return findLanIpv4AddressCandidates(networkInterfaces).map((candidate) => candidate.address);
 }
 
+function findAdvertisableLanIpv4Addresses(networkInterfaces: NodeJS.Dict<NetworkInterfaceEntry[]>): string[] {
+  const candidates = findLanIpv4AddressCandidates(networkInterfaces);
+  const reachableCandidates = candidates.filter((candidate) => candidate.score >= 0);
+  const selectedCandidates = reachableCandidates.length > 0 ? reachableCandidates : candidates;
+  return selectedCandidates.map((candidate) => candidate.address);
+}
+
 function findLanIpv4Address(networkInterfaces: NodeJS.Dict<NetworkInterfaceEntry[]>): string {
   return findLanIpv4Addresses(networkInterfaces)[0] ?? "";
 }
@@ -238,7 +245,7 @@ export function createServiceUrlCandidates(input: CreateServiceUrlInput): string
   }
 
   if (isAllInterfaceHost(input.bindHost)) {
-    const lanAddresses = findLanIpv4Addresses(networkInterfaces);
+    const lanAddresses = findAdvertisableLanIpv4Addresses(networkInterfaces);
     for (const address of lanAddresses) {
       pushUnique(result, formatServiceUrl(address, port));
     }

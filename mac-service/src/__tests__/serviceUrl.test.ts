@@ -47,8 +47,7 @@ describe("service url resolver", () => {
     expect(createServiceUrl(input)).toBe("https://192.168.2.31:37631");
     expect(createServiceUrlCandidates(input)).toEqual([
       "https://192.168.2.31:37631",
-      "https://windows-pc.local:37631",
-      "https://192.168.6.1:37631"
+      "https://windows-pc.local:37631"
     ]);
   });
 
@@ -68,8 +67,7 @@ describe("service url resolver", () => {
     expect(createServiceUrl(input)).toBe("https://192.168.2.31:37631");
     expect(createServiceUrlCandidates(input)).toEqual([
       "https://192.168.2.31:37631",
-      "https://windows-pc.local:37631",
-      "https://192.168.68.1:37631"
+      "https://windows-pc.local:37631"
     ]);
   });
 

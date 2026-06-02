@@ -148,8 +148,7 @@ describe("pairing routes", () => {
     expect(qrPayload.serviceUrl).toBe("https://192.168.2.31:37631");
     expect(qrPayload.candidateServiceUrls).toEqual([
       "https://192.168.2.31:37631",
-      "https://windows-pc.local:37631",
-      "https://192.168.6.1:37631"
+      "https://windows-pc.local:37631"
     ]);
   });
 
