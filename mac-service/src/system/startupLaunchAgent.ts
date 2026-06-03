@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ServiceConfig } from "../config.js";
 
-const LAUNCH_AGENT_LABEL = "com.lyz1022.code.mac-service";
+const LAUNCH_AGENT_LABEL = "com.liuyongzhe.code.mac-service";
 
 export interface StartupLaunchAgentOptions {
   launchAgentDir: string;

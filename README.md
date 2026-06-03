@@ -115,6 +115,14 @@ C:\Users\<you>\Documents\Codex\code-data\start-code-desktop-service.ps1
 
 The generated start script uses the absolute `node.exe` path validated during setup, not a bare `node` command. This avoids later failures when `PATH` resolves `node.exe` to a WindowsApps alias such as `C:\Program Files\WindowsApps\OpenAI.Codex_...\node.exe`.
 
+To capture service output while reproducing Windows session issues, run the generated start script with `-TraceAppServer`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Users\<you>\Documents\Codex\code-data\start-code-desktop-service.ps1" -TraceAppServer
+```
+
+The generated start script writes combined stdout and stderr to `C:\Users\<you>\Documents\Codex\code-data\logs\desktop-service-*.log`. The `-TraceAppServer` switch also enables `CODE_TRACE_CODEX_APP_SERVER=1` for Codex App Server event tracing.
+
 The generated start script binds the service to `0.0.0.0` by default so paired mobile devices can connect through the Windows PC's LAN address. Open the management page from the Windows PC through `https://localhost:37631`. If pairing times out from the mobile device, allow Node.js on private networks in Windows Defender Firewall or allow inbound TCP port `37631`.
 
 This script does not silently install the local CA into the Windows Root store and does not register startup. Certificate trust is still installed from the loopback-only local management page, and Windows startup/capture automation remains unsupported in this phase.

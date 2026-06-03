@@ -250,13 +250,22 @@ $quotedCodexBin = ConvertTo-SingleQuotedPowerShellString $resolvedCodexBin
 $quotedNodePath = ConvertTo-SingleQuotedPowerShellString $resolvedNodePath
 $managementHost = Get-LocalManagementHost $ServiceHost
 $startScript = @"
+param([switch]`$TraceAppServer)
 `$ErrorActionPreference = "Stop"
 `$env:CODE_HOST = "$ServiceHost"
 `$env:CODE_PORT = "$Port"
 `$env:CODE_DATA_DIR = $quotedDataDir
 `$env:CODEX_BIN = $quotedCodexBin
+`$logDir = Join-Path `$env:CODE_DATA_DIR "logs"
+New-Item -ItemType Directory -Force -Path `$logDir | Out-Null
+`$logPath = Join-Path `$logDir ("desktop-service-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
+if (`$TraceAppServer) {
+  `$env:CODE_TRACE_CODEX_APP_SERVER = "1"
+  Write-Host "Codex app-server trace enabled."
+}
+Write-Host "Log file: `$logPath"
 Set-Location $quotedRepoRoot
-& $quotedNodePath .\mac-service\dist\main.js
+& $quotedNodePath .\mac-service\dist\main.js *>&1 | Tee-Object -FilePath `$logPath
 "@
 Set-Content -LiteralPath $startScriptPath -Value $startScript -Encoding UTF8
 Write-Host "Start script: $startScriptPath"
@@ -264,6 +273,7 @@ Write-Host "Start script: $startScriptPath"
 Write-Step "Done"
 Write-Host "Run the desktop service:"
 Write-Host "  powershell -ExecutionPolicy Bypass -File `"$startScriptPath`""
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$startScriptPath`" -TraceAppServer"
 Write-Host ""
 Write-Host "Management page:"
 Write-Host "  https://$managementHost`:$Port/"

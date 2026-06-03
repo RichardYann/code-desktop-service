@@ -408,14 +408,13 @@ describe("command flow", () => {
     });
   });
 
-  it("forwards command approval decline reasons only through the Codex follow-up path", async () => {
+  it("forwards command approval decline reasons only through the official approval response", async () => {
     const events: string[] = [];
     const sessions = createCodexSessionManager({
       request: async (method, params) => {
         const record = asRecord(params);
         const input = Array.isArray(record.input) ? asRecord(record.input[0]) : {};
         events.push(`request:${method}:${String(input.text ?? "")}`);
-        if (method === "turn/start") return { turn: { id: "turn-followup", status: "running" } };
         return {};
       },
       respond: (id, result) => {
@@ -441,9 +440,7 @@ describe("command flow", () => {
     });
 
     expect(events).toEqual([
-      "respond:approval-decline-reason:{\"decision\":\"decline\"}",
-      "request:thread/resume:",
-      "request:turn/start:请改成只读检查"
+      "respond:approval-decline-reason:{\"decision\":\"decline\"}"
     ]);
     expect(sessions.readPendingApproval("thread-approval")).toMatchObject({
       id: "approval-decline-reason"
@@ -3665,9 +3662,7 @@ describe("command flow", () => {
       "follower:compact:thread-desktop",
       "follower:approval:thread-desktop:approval-1:approve",
       "follower:approval:thread-desktop:approval-2:decline",
-      "follower:start:thread-desktop:请改成只读方案",
       "follower:approval:thread-desktop:approval-3:cancel",
-      "follower:start:thread-desktop:请先说明修改范围",
       "local:start"
     ]);
   });

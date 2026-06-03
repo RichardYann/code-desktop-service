@@ -24,16 +24,21 @@ describe("Windows desktop service install script", () => {
   });
 
   it("generates a local start script with the required service environment", () => {
+    expect(script).toContain("param([switch]`$TraceAppServer)");
     expect(script).toContain("$env:CODE_HOST");
     expect(script).toContain("$env:CODE_PORT");
     expect(script).toContain("$env:CODE_DATA_DIR");
     expect(script).toContain("$env:CODEX_BIN");
+    expect(script).toContain("$env:CODE_TRACE_CODEX_APP_SERVER = \"1\"");
+    expect(script).toContain("Join-Path `$env:CODE_DATA_DIR \"logs\"");
+    expect(script).toContain("Tee-Object -FilePath `$logPath");
     expect(script).toContain('[string]$ServiceHost = "0.0.0.0"');
     expect(script).toContain("Get-LocalManagementHost");
     expect(script).toContain("$quotedNodePath = ConvertTo-SingleQuotedPowerShellString $resolvedNodePath");
     expect(script).toContain("& $quotedNodePath .\\mac-service\\dist\\main.js");
     expect(script).toContain("curl.exe -k https://$managementHost`:$Port/api/health");
     expect(script).toContain("curl.exe -k https://$managementHost`:$Port/api/codex-preflight");
+    expect(script).toContain("powershell -ExecutionPolicy Bypass -File `\"$startScriptPath`\" -TraceAppServer");
     expect(script).toContain("allow Node.js on private networks");
     expect(script).toContain("allow inbound TCP port $Port");
   });

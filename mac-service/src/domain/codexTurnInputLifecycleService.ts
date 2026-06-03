@@ -2,9 +2,15 @@ export class CodexTurnInputLifecycleService {
   private activeTurns = new Map<string, string>();
   private pendingTurnStarts = new Set<string>();
   private interruptPendingTurns = new Map<string, string>();
+  private terminalTurns = new Set<string>();
+
+  private turnKey(sessionId: string, turnId: string): string {
+    return `${sessionId}:${turnId}`;
+  }
 
   noteTurnStarted(sessionId: string, turnId: string): void {
     if (sessionId.length === 0 || turnId.length === 0) return;
+    this.terminalTurns.delete(this.turnKey(sessionId, turnId));
     this.activeTurns.set(sessionId, turnId);
     this.pendingTurnStarts.delete(sessionId);
     this.interruptPendingTurns.delete(sessionId);
@@ -17,6 +23,10 @@ export class CodexTurnInputLifecycleService {
 
   noteTurnStartedFromStartResponse(sessionId: string, turnId: string, previousTurnId: string | undefined): void {
     if (sessionId.length === 0 || turnId.length === 0) return;
+    if (this.terminalTurns.has(this.turnKey(sessionId, turnId))) {
+      this.pendingTurnStarts.delete(sessionId);
+      return;
+    }
     const currentTurnId = this.activeTurns.get(sessionId);
     if (currentTurnId === undefined || currentTurnId === previousTurnId) {
       this.activeTurns.set(sessionId, turnId);
@@ -31,6 +41,9 @@ export class CodexTurnInputLifecycleService {
 
   noteTurnCompleted(sessionId: string, turnId?: string): void {
     if (sessionId.length === 0) return;
+    if (turnId !== undefined && turnId.length > 0) {
+      this.terminalTurns.add(this.turnKey(sessionId, turnId));
+    }
     const activeTurnId = this.activeTurns.get(sessionId);
     if (turnId === undefined || turnId.length === 0 || activeTurnId === undefined || activeTurnId === turnId) {
       this.activeTurns.delete(sessionId);

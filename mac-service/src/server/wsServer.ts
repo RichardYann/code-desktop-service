@@ -1517,20 +1517,12 @@ export function createFollowerAwareSessions(
     async respondToApproval(approvalId: string, actionId: string, answers?: CodexApprovalAnswers, threadId?: string): Promise<unknown> {
       const desktopState = threadId ? desktopStateForThread(desktopFollower, threadId) : null;
       if (threadId && desktopState) {
-        const adjustmentReason = approvalActionCanCarryAdjustmentReason(actionId) ? approvalDeclineReasonFromAnswers(answers) : "";
-        const response = unwrapIpcResponse(await desktopFollower?.respondToApproval({
+        return unwrapIpcResponse(await desktopFollower?.respondToApproval({
           threadId,
           approvalId,
           actionId,
           answers: answers as Record<string, unknown> | undefined
         }));
-        if (adjustmentReason.length > 0) {
-          await unwrapIpcResponse(await desktopFollower?.startTurn({
-            threadId,
-            text: adjustmentReason
-          }));
-        }
-        return response;
       }
       return localSessions.respondToApproval(approvalId, actionId, answers, threadId);
     }
@@ -1585,24 +1577,6 @@ function approvalDeclineReasonFromAnswers(answers: CodexApprovalAnswers | undefi
     if (value.length > 0) return value;
   }
   return "";
-}
-
-function isDeclineApprovalActionId(actionId: string): boolean {
-  return actionId === "decline" ||
-    actionId === "reject" ||
-    actionId === "deny" ||
-    actionId === "disallow" ||
-    actionId === "no";
-}
-
-function isCancelApprovalActionId(actionId: string): boolean {
-  return actionId === "cancel" ||
-    actionId === "dismiss" ||
-    actionId === "abort";
-}
-
-function approvalActionCanCarryAdjustmentReason(actionId: string): boolean {
-  return isDeclineApprovalActionId(actionId) || isCancelApprovalActionId(actionId);
 }
 
 function sessionIdFromParams(params: Record<string, unknown>): string {

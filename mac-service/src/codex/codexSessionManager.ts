@@ -134,20 +134,6 @@ function inputItemsFromTextOrItems(input: CodexTurnInputSource): Array<Record<st
   throw new Error("Codex turn input must include text or inputItems");
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isTurnStartTemporarilyBlocked(error: unknown): boolean {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return message.includes("active turn") ||
-    message.includes("already active") ||
-    message.includes("already running") ||
-    message.includes("in progress") ||
-    message.includes("running turn") ||
-    message.includes("another turn");
-}
-
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timeout: NodeJS.Timeout;
   return Promise.race([
@@ -158,31 +144,6 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   ]);
 }
 
-function firstAnswerText(answers: CodexApprovalAnswers | undefined, fieldId: string): string {
-  if (!answers) return "";
-  const field = answers[fieldId];
-  if (!field) return "";
-  for (const answer of field.answers) {
-    const trimmed = answer.trim();
-    if (trimmed.length > 0) return trimmed;
-  }
-  return "";
-}
-
-function approvalReasonFromAnswers(answers: CodexApprovalAnswers | undefined): string {
-  const preferred = firstAnswerText(answers, "reason") ||
-    firstAnswerText(answers, "declineReason") ||
-    firstAnswerText(answers, "adjustment") ||
-    firstAnswerText(answers, "answer");
-  if (preferred.length > 0) return preferred;
-  if (!answers) return "";
-  for (const key of Object.keys(answers)) {
-    const value = firstAnswerText(answers, key);
-    if (value.length > 0) return value;
-  }
-  return "";
-}
-
 function approvalThreadId(params: Record<string, unknown>): string | null {
   return stringOrNull(params.threadId) ?? stringOrNull(params.sessionId) ?? stringOrNull(params.conversationId);
 }
@@ -190,13 +151,6 @@ function approvalThreadId(params: Record<string, unknown>): string | null {
 function approvalTurnId(params: Record<string, unknown>): string | null {
   const turn = asRecord(params.turn);
   return stringOrNull(params.turnId) ?? stringOrNull(turn.id) ?? stringOrNull(turn.turnId);
-}
-
-function shouldSendApprovalAdjustmentReason(method: CodexServerRequestMethod, response: Record<string, unknown>): boolean {
-  const decision = response.decision;
-  if (decision === "decline") return true;
-  if (decision !== "cancel") return false;
-  return method === "item/commandExecution/requestApproval" || method === "item/fileChange/requestApproval";
 }
 
 function normalizeTurnStatus(status: unknown): string {
@@ -1231,21 +1185,6 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
     const turn = asRecord(turnResponse.turn ?? turnResponse);
     return { turnId: String(turn.id ?? turn.turnId), status: normalizeTurnStatus(turn.status) };
   };
-  const startApprovalAdjustmentFollowup = async (input: { threadId: string; text: string }) => {
-    let lastError: unknown = null;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      if (attempt > 0) await delay(250);
-      try {
-        return await startTurnInternal(input);
-      } catch (error) {
-        lastError = error;
-        if (!isTurnStartTemporarilyBlocked(error)) throw error;
-      }
-    }
-    if (lastError instanceof Error) throw lastError;
-    throw new Error("审批调整说明发送失败");
-  };
-
   const createThread = async (input: CreateCodexThreadInput): Promise<{ threadId: string }> => {
     const threadResponse = asRecord(await client.request("thread/start", {
       cwd: createSessionCwd({ projectPath: input.projectPath, text: input.text }, options),
@@ -1401,16 +1340,7 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
       const request = pendingApprovals.get(requestId);
       if (!request) throw new Error("审批请求不存在或已处理");
       const response = mapCodexApprovalResponse({ method: request.method, actionId, answers, params: request.params });
-      const responseRecord = asRecord(response);
-      const declineReason = shouldSendApprovalAdjustmentReason(request.method, responseRecord) ? approvalReasonFromAnswers(answers) : "";
-      const threadId = declineReason.length > 0 ? approvalThreadId(request.params) : null;
-      if (declineReason.length > 0 && !threadId) {
-        throw new Error("当前审批请求缺少 threadId，无法把调整说明发送给 Codex");
-      }
       client.respond(requestId, response);
-      if (declineReason.length > 0 && threadId) {
-        await startApprovalAdjustmentFollowup({ threadId, text: declineReason });
-      }
     }
   };
 }

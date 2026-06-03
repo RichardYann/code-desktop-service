@@ -1705,7 +1705,7 @@ describe("codex session manager", () => {
     ]);
   });
 
-  it("sends decline reasons back to the active turn after rejecting approvals", async () => {
+  it("responds to command approval decline without starting a synthetic follow-up turn", async () => {
     const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
     const manager = createCodexSessionManager({
       request: async (method, params) => {
@@ -1727,28 +1727,11 @@ describe("codex session manager", () => {
     });
 
     expect(calls).toEqual([
-      { kind: "respond", id: "approval-1", result: { decision: "decline" } },
-      {
-        kind: "request",
-        method: "thread/resume",
-        params: { threadId: "thread-1" }
-      },
-      {
-        kind: "request",
-        method: "turn/start",
-        params: {
-          threadId: "thread-1",
-          input: [{
-            type: "text",
-            text: expect.stringContaining("先跑定向测试，不要跑全量测试"),
-            text_elements: []
-          }]
-        }
-      }
+      { kind: "respond", id: "approval-1", result: { decision: "decline" } }
     ]);
   });
 
-  it("sends cancel adjustment reasons back to the active turn for command and file approvals", async () => {
+  it("responds to cancel approval reasons without starting synthetic follow-up turns", async () => {
     const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
     const manager = createCodexSessionManager({
       request: async (method, params) => {
@@ -1780,45 +1763,11 @@ describe("codex session manager", () => {
 
     expect(calls).toEqual([
       { kind: "respond", id: "command-approval", result: { decision: "cancel" } },
-      {
-        kind: "request",
-        method: "thread/resume",
-        params: { threadId: "thread-1" }
-      },
-      {
-        kind: "request",
-        method: "turn/start",
-        params: {
-          threadId: "thread-1",
-          input: [{
-            type: "text",
-            text: expect.stringContaining("改成只运行定向测试"),
-            text_elements: []
-          }]
-        }
-      },
-      { kind: "respond", id: "file-approval", result: { decision: "cancel" } },
-      {
-        kind: "request",
-        method: "thread/resume",
-        params: { threadId: "thread-1" }
-      },
-      {
-        kind: "request",
-        method: "turn/start",
-        params: {
-          threadId: "thread-1",
-          input: [{
-            type: "text",
-            text: expect.stringContaining("先给出补丁摘要，不要直接写文件"),
-            text_elements: []
-          }]
-        }
-      }
+      { kind: "respond", id: "file-approval", result: { decision: "cancel" } }
     ]);
   });
 
-  it("does not consume approvals when decline reasons cannot be delivered", async () => {
+  it("responds to decline even when a local reason is present but the request has no thread id", async () => {
     const responses: unknown[] = [];
     const manager = createCodexSessionManager({
       request: async () => ({}),
@@ -1833,9 +1782,9 @@ describe("codex session manager", () => {
       params: { command: "pnpm test" }
     });
 
-    await expect(manager.respondToApproval("approval-1", "decline", {
+    await manager.respondToApproval("approval-1", "decline", {
       reason: { answers: ["请改成只读方案"] }
-    })).rejects.toThrow("threadId");
-    expect(responses).toEqual([]);
+    });
+    expect(responses).toEqual([{ decision: "decline" }]);
   });
 });
