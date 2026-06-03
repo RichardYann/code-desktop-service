@@ -6067,6 +6067,79 @@ describe("command flow", () => {
     ws.terminate();
   });
 
+  it("acknowledges synced sends when the pre-router active-turn check is stale", async () => {
+    const context = createTestAppContext();
+    const startInputs: Record<string, unknown>[] = [];
+    const startTurnGate: { resolve: ((value: { turnId: string; status: string }) => void) | null } = { resolve: null };
+    let readCount = 0;
+    context.codex.createSessionRuntime = async () =>
+      createRuntime({
+        listSessionSummaries: async () => [],
+        readSessionDetail: async () => {
+          readCount++;
+          const detail = sessionDetail("thread-synced-stale-ack");
+          if (readCount === 1) {
+            detail.turns = [{
+              id: "turn-stale-active-before-send",
+              sessionId: "thread-synced-stale-ack",
+              status: "running",
+              startedAt: "2026-05-17T18:30:00.000Z",
+              completedAt: null,
+              items: []
+            }];
+            detail.session.statusLabel = "running";
+            detail.session.waitsForNextDirection = false;
+            return detail;
+          }
+          detail.turns = [];
+          detail.session.statusLabel = "idle";
+          detail.session.waitsForNextDirection = true;
+          return detail;
+        },
+        startTurn: async (input) => {
+          startInputs.push(asRecord(input));
+          return await new Promise<{ turnId: string; status: string }>((resolve) => {
+            startTurnGate.resolve = resolve;
+          });
+        }
+      });
+    server = await createServer(context);
+    await server.ready();
+    const { ws } = await openAuthedWs(context, server as TestServer);
+    const messages = collectWsMessages(ws);
+    await waitForWsMessage(messages, (message) => message.type === "sessions.snapshot");
+    sendCommand(ws, {
+      type: "session.sync.enable",
+      requestId: "r-sync-synced-stale-ack",
+      sessionId: "thread-synced-stale-ack",
+      activeDetail: true
+    });
+    await waitForWsMessage(messages, (message) =>
+      message.type === "thread.detail.snapshot" && message.sessionId === "thread-synced-stale-ack");
+
+    sendCommand(ws, {
+      type: "session.sendText",
+      requestId: "r-send-synced-stale-ack",
+      sessionId: "thread-synced-stale-ack",
+      clientMessageId: "m-synced-stale-ack",
+      text: "画一只可爱的耶耶",
+      guidance: { mode: "guided", selectedCapabilityIds: [] }
+    });
+
+    const received = await waitForWsMessage(messages, (message) => {
+      const item = asRecord(message.message);
+      return message.type === "message.updated" &&
+        item.sessionId === "thread-synced-stale-ack" &&
+        item.clientMessageId === "m-synced-stale-ack" &&
+        item.sendState === "received";
+    });
+    expect(received.type).toBe("message.updated");
+    await waitForCondition(() => startInputs.length === 1);
+    expect(startInputs[0].skipPreflightResume).toBe(true);
+    startTurnGate.resolve?.({ turnId: "turn-synced-stale-ack", status: "running" });
+    ws.terminate();
+  });
+
   it("queues WebSocket ordinary sends when a preserved active turn exists", async () => {
     const context = createTestAppContext();
     const calls: string[] = [];

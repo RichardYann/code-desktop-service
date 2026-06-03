@@ -2205,6 +2205,7 @@ async function handleClientMessage(
       ? { ...parsed.data, skipPreflightResume: true }
       : parsed.data;
 
+    let sendTextImmediateAckSent = false;
     if (parsed.data.type === "session.sendText") {
       subscriber.syncedSessionIds.add(parsed.data.sessionId);
       subscriber.activeDetailSessionId = parsed.data.sessionId;
@@ -2218,6 +2219,7 @@ async function handleClientMessage(
           assetIds: parsed.data.attachmentIds,
           ...(wantsSteerNow ? { sendState: "guided" as const } : {})
         });
+        sendTextImmediateAckSent = true;
       }
     }
 
@@ -2393,7 +2395,7 @@ async function handleClientMessage(
           send(socket, event);
         }
       }
-      if (parsed.data.type === "session.sendText" && result.messageId === parsed.data.clientMessageId) {
+      if (parsed.data.type === "session.sendText" && result.messageId === parsed.data.clientMessageId && sendTextImmediateAckSent) {
         return;
       }
       sendReceivedMessage(socket, { messageId: result.messageId, sessionId: result.sessionId, text: result.text, sendState: result.sendState, assetIds: result.attachmentIds });
