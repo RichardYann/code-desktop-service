@@ -3423,6 +3423,51 @@ describe("command flow", () => {
     expect(queue.list("thread-stale-active")[0]?.text).toBe("继续");
   });
 
+  it("starts a new turn when a fresh detail read clears stale cached active state before send", async () => {
+    const calls: string[] = [];
+    const queue = createSessionInputQueueService();
+    const idleDetail = sessionDetail("thread-fresh-idle-send");
+    idleDetail.session.statusLabel = "idle";
+    idleDetail.session.waitsForNextDirection = true;
+    const router = createCommandRouter({
+      sessions: {
+        createSession: async () => ({ threadId: "thread-fresh-idle-send", turnId: "turn-created", status: "running" }),
+        readSessionDetail: async () => idleDetail,
+        startTurn: async (input) => {
+          calls.push(`start:${input.threadId}:${turnInputText(input)}`);
+          return { turnId: "turn-after-fresh-idle", status: "running" };
+        },
+        steerTurn: async (input) => {
+          calls.push(`steer:${input.threadId}:${input.turnId}:${turnInputText(input)}`);
+          return {};
+        },
+        interruptTurn: async () => ({}),
+        respondToApproval: async () => undefined
+      },
+      queue
+    });
+
+    router.noteTurnStarted("thread-fresh-idle-send", "turn-stale-active");
+    const result = await router.handle(ClientCommandSchema.parse({
+      type: "session.sendText",
+      requestId: "r-fresh-idle-send",
+      sessionId: "thread-fresh-idle-send",
+      clientMessageId: "m-fresh-idle-send",
+      text: "第二条应该开启新 turn"
+    }));
+
+    expect(result).toEqual({
+      kind: "message.received",
+      requestId: "r-fresh-idle-send",
+      sessionId: "thread-fresh-idle-send",
+      messageId: "m-fresh-idle-send",
+      text: "第二条应该开启新 turn"
+    });
+    await waitForCondition(() => calls.length > 0);
+    expect(calls).toEqual(["start:thread-fresh-idle-send:第二条应该开启新 turn"]);
+    expect(queue.list("thread-fresh-idle-send")).toHaveLength(0);
+  });
+
   it("queues ordinary sends without checking cached stale turn ids", async () => {
     const calls: string[] = [];
     const failures: Array<{ requestId: string; message: string }> = [];
@@ -5214,11 +5259,12 @@ describe("command flow", () => {
       (message.turn as Record<string, unknown> | undefined)?.id === "turn-stale-queue-drain");
 
     sendCommand(ws, {
-      type: "session.sendText",
-      requestId: "send-stale-queue-drain",
+      type: "session.inputQueue.enqueue",
+      requestId: "queue-stale-queue-drain",
       sessionId: "thread-stale-queue-drain",
       clientMessageId: "message-stale-queue-drain",
-      text: "空闲后应自动进入下一轮"
+      text: "空闲后应自动进入下一轮",
+      guidance: { mode: "queued", selectedCapabilityIds: [] }
     });
     await waitForWsMessage(messages, (message) => {
       const items = message.items as Array<Record<string, unknown>> | undefined;

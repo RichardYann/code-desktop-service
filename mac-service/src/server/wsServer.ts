@@ -547,6 +547,23 @@ export function createCommandRouter(deps: {
     return Boolean(turnId) && command.guidance?.mode === "steer-now";
   }
 
+  async function refreshCachedActiveTurnBeforeOrdinarySend(sessionId: string): Promise<void> {
+    if (!turnInputLifecycle.hasActiveTurn(sessionId)) return;
+    try {
+      const detail = await readSessionDetailForCommand(sessionId);
+      const activeTurnId = activeTurnIdFromSessionDetail(detail);
+      if (activeTurnId.length > 0) {
+        turnInputLifecycle.noteTurnStarted(detail.session.id, activeTurnId);
+        return;
+      }
+      if (detail.session.waitsForNextDirection || sessionStatusIndicatesIdle(detail.session.statusLabel)) {
+        turnInputLifecycle.noteTurnCompleted(detail.session.id);
+      }
+    } catch {
+      // Keep the cached active turn when the fresh detail read is unavailable.
+    }
+  }
+
   async function buildTurnInputWithAttachments(input: {
     sessionId: string;
     clientMessageId?: string;
@@ -1067,6 +1084,9 @@ export function createCommandRouter(deps: {
       }
 
       if (command.type === "session.sendText") {
+        if (command.guidance?.mode !== "steer-now" && !turnInputLifecycle.canStartNewTurn(command.sessionId)) {
+          await refreshCachedActiveTurnBeforeOrdinarySend(command.sessionId);
+        }
         const turnId = turnInputLifecycle.activeTurnId(command.sessionId);
         const wantsSteerNow = command.guidance?.mode === "steer-now";
         if (wantsSteerNow && !turnId) {
