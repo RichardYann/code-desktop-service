@@ -153,6 +153,50 @@ function approvalTurnId(params: Record<string, unknown>): string | null {
   return stringOrNull(params.turnId) ?? stringOrNull(turn.id) ?? stringOrNull(turn.turnId);
 }
 
+const APPROVAL_ADJUSTMENT_ACTIONS = new Set(["decline", "reject", "deny", "disallow", "no", "cancel", "dismiss", "abort"]);
+
+function firstApprovalAnswerText(answers: CodexApprovalAnswers | undefined, fieldId: string): string {
+  if (!answers) return "";
+  const field = answers[fieldId];
+  if (!field) return "";
+  for (const answer of field.answers) {
+    const trimmed = answer.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return "";
+}
+
+function approvalAdjustmentTextFromAnswers(answers: CodexApprovalAnswers | undefined): string {
+  const preferred = firstApprovalAnswerText(answers, "reason") ||
+    firstApprovalAnswerText(answers, "declineReason") ||
+    firstApprovalAnswerText(answers, "adjustment") ||
+    firstApprovalAnswerText(answers, "answer");
+  if (preferred.length > 0) return preferred;
+  if (!answers) return "";
+  for (const key of Object.keys(answers)) {
+    const value = firstApprovalAnswerText(answers, key);
+    if (value.length > 0) return value;
+  }
+  return "";
+}
+
+function shouldSteerApprovalAdjustment(method: CodexServerRequestMethod, actionId: string, answers: CodexApprovalAnswers | undefined): boolean {
+  if (method !== "item/commandExecution/requestApproval" && method !== "item/fileChange/requestApproval") return false;
+  if (!APPROVAL_ADJUSTMENT_ACTIONS.has(actionId)) return false;
+  return approvalAdjustmentTextFromAnswers(answers).length > 0;
+}
+
+function isInactiveTurnSteerError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes("not active") ||
+    message.includes("no active") ||
+    message.includes("not found") ||
+    message.includes("completed") ||
+    message.includes("expectedturnid") ||
+    message.includes("expected turn");
+}
+
 function normalizeTurnStatus(status: unknown): string {
   if (status === "inProgress") return "running";
   if (typeof status === "string") return status;
@@ -1185,6 +1229,29 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
     const turn = asRecord(turnResponse.turn ?? turnResponse);
     return { turnId: String(turn.id ?? turn.turnId), status: normalizeTurnStatus(turn.status) };
   };
+  const steerApprovalAdjustment = async (
+    request: { method: CodexServerRequestMethod; params: Record<string, unknown> },
+    answers: CodexApprovalAnswers | undefined
+  ): Promise<void> => {
+    const text = approvalAdjustmentTextFromAnswers(answers);
+    if (text.length === 0) return;
+    const threadId = approvalThreadId(request.params);
+    if (threadId === null || threadId.length === 0) return;
+    const turnId = approvalTurnId(request.params);
+    if (turnId !== null && turnId.length > 0) {
+      try {
+        await client.request("turn/steer", {
+          threadId,
+          expectedTurnId: turnId,
+          input: textInput(text)
+        });
+        return;
+      } catch (error) {
+        if (!isInactiveTurnSteerError(error)) throw error;
+      }
+    }
+    await startTurnInternal({ threadId, text });
+  };
   const createThread = async (input: CreateCodexThreadInput): Promise<{ threadId: string }> => {
     const threadResponse = asRecord(await client.request("thread/start", {
       cwd: createSessionCwd({ projectPath: input.projectPath, text: input.text }, options),
@@ -1341,6 +1408,9 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
       if (!request) throw new Error("审批请求不存在或已处理");
       const response = mapCodexApprovalResponse({ method: request.method, actionId, answers, params: request.params });
       client.respond(requestId, response);
+      if (shouldSteerApprovalAdjustment(request.method, actionId, answers)) {
+        await steerApprovalAdjustment(request, answers);
+      }
     }
   };
 }

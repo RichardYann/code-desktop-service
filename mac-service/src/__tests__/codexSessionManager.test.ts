@@ -1705,7 +1705,7 @@ describe("codex session manager", () => {
     ]);
   });
 
-  it("responds to command approval decline without starting a synthetic follow-up turn", async () => {
+  it("responds to command approval decline and steers the provided adjustment into the active turn", async () => {
     const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
     const manager = createCodexSessionManager({
       request: async (method, params) => {
@@ -1727,11 +1727,20 @@ describe("codex session manager", () => {
     });
 
     expect(calls).toEqual([
-      { kind: "respond", id: "approval-1", result: { decision: "decline" } }
+      { kind: "respond", id: "approval-1", result: { decision: "decline" } },
+      {
+        kind: "request",
+        method: "turn/steer",
+        params: {
+          threadId: "thread-1",
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "先跑定向测试，不要跑全量测试", text_elements: [] }]
+        }
+      }
     ]);
   });
 
-  it("responds to cancel approval reasons without starting synthetic follow-up turns", async () => {
+  it("responds to cancel approval reasons and steers adjustments into their active turns", async () => {
     const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
     const manager = createCodexSessionManager({
       request: async (method, params) => {
@@ -1763,7 +1772,25 @@ describe("codex session manager", () => {
 
     expect(calls).toEqual([
       { kind: "respond", id: "command-approval", result: { decision: "cancel" } },
-      { kind: "respond", id: "file-approval", result: { decision: "cancel" } }
+      {
+        kind: "request",
+        method: "turn/steer",
+        params: {
+          threadId: "thread-1",
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "改成只运行定向测试", text_elements: [] }]
+        }
+      },
+      { kind: "respond", id: "file-approval", result: { decision: "cancel" } },
+      {
+        kind: "request",
+        method: "turn/steer",
+        params: {
+          threadId: "thread-1",
+          expectedTurnId: "turn-2",
+          input: [{ type: "text", text: "先给出补丁摘要，不要直接写文件", text_elements: [] }]
+        }
+      }
     ]);
   });
 

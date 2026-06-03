@@ -408,7 +408,7 @@ describe("command flow", () => {
     });
   });
 
-  it("forwards command approval decline reasons only through the official approval response", async () => {
+  it("forwards command approval decline reasons through active-turn steering after the official response", async () => {
     const events: string[] = [];
     const sessions = createCodexSessionManager({
       request: async (method, params) => {
@@ -440,7 +440,8 @@ describe("command flow", () => {
     });
 
     expect(events).toEqual([
-      "respond:approval-decline-reason:{\"decision\":\"decline\"}"
+      "respond:approval-decline-reason:{\"decision\":\"decline\"}",
+      "request:turn/steer:请改成只读检查"
     ]);
     expect(sessions.readPendingApproval("thread-approval")).toMatchObject({
       id: "approval-decline-reason"
