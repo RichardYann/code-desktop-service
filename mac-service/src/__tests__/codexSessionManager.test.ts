@@ -935,6 +935,42 @@ describe("codex session manager", () => {
     });
   });
 
+  it("recovers pending exec approval turn ids from Codex jsonl turn context records", () => {
+    const jsonl = [
+      JSON.stringify({
+        timestamp: "2026-06-04T12:19:50.000Z",
+        type: "turn_context",
+        payload: { thread_id: "thread-approval", turn_id: "turn-from-context" }
+      }),
+      JSON.stringify({
+        timestamp: "2026-06-04T12:19:55.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          call_id: "call-approval-context",
+          arguments: JSON.stringify({
+            cmd: "/bin/zsh -lc date",
+            sandbox_permissions: "require_escalated",
+            justification: "Need approval for command"
+          })
+        }
+      })
+    ].join("\n");
+
+    const request = readCodexJsonlPendingApproval(jsonl, "thread-approval");
+
+    expect(request).toMatchObject({
+      id: "call-approval-context",
+      params: {
+        threadId: "thread-approval",
+        turnId: "turn-from-context",
+        itemId: "call-approval-context",
+        command: "/bin/zsh -lc date"
+      }
+    });
+  });
+
   it("does not recover exec approval requests after Codex jsonl has a matching function output", () => {
     const jsonl = [
       JSON.stringify({
@@ -1317,6 +1353,46 @@ describe("codex session manager", () => {
 
     expect(messages.map((message) => ({ role: message.role, text: message.text }))).toEqual([
       { role: "assistant", text: "收到" }
+    ]);
+  });
+
+  it("does not filter assistant text by handoff-looking markers without a compacted structure", () => {
+    const jsonl = [
+      JSON.stringify({ timestamp: "2026-06-03T15:20:00.000Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "我先确认一下当前状态。" }] } }),
+      JSON.stringify({ timestamp: "2026-06-03T15:20:01.000Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "## Handoff Summary\n\n### Current User Request\n用户要求解释并修复移动端详情页底部脏内容。\n\n### Workspace / Branch\n- Repo root: `/repo`" }] } }),
+      JSON.stringify({ timestamp: "2026-06-03T15:20:01.500Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "## Handoff Summary\n\n### Current User Issue\nUser says pairing is still wrong after latest mobile install." }] } }),
+      JSON.stringify({ timestamp: "2026-06-03T15:20:02.000Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "**Handoff Summary**\n\n**Important Current State**\nThe running simulator currently has Windows device paired.\n\n**Critical Caution**\nDo not continue testing yet." }] } }),
+      JSON.stringify({ timestamp: "2026-06-03T15:20:03.000Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Another language model started to solve this problem and produced a summary of its thinking process.\n## Handoff Summary\n\n### Current User Request\n继续接力。" }] } }),
+      JSON.stringify({ timestamp: "2026-06-03T15:20:04.000Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "正常回复里提到 handoff 这个词也应该保留。" }] } }),
+      JSON.stringify({ timestamp: "2026-06-03T15:20:05.000Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "这次查清楚了：正常最终结论里引用 `Another language model started to solve this problem` 或 `## Handoff Summary` 时，仍然必须显示。" }] } })
+    ].join("\n");
+
+    const messages = readCodexJsonlMessages(jsonl, "thread-1");
+
+    expect(messages.map((message) => message.text)).toEqual([
+      "我先确认一下当前状态。",
+      "## Handoff Summary\n\n### Current User Request\n用户要求解释并修复移动端详情页底部脏内容。\n\n### Workspace / Branch\n- Repo root: `/repo`",
+      "## Handoff Summary\n\n### Current User Issue\nUser says pairing is still wrong after latest mobile install.",
+      "**Handoff Summary**\n\n**Important Current State**\nThe running simulator currently has Windows device paired.\n\n**Critical Caution**\nDo not continue testing yet.",
+      "Another language model started to solve this problem and produced a summary of its thinking process.\n## Handoff Summary\n\n### Current User Request\n继续接力。",
+      "正常回复里提到 handoff 这个词也应该保留。",
+      "这次查清楚了：正常最终结论里引用 `Another language model started to solve this problem` 或 `## Handoff Summary` 时，仍然必须显示。"
+    ]);
+  });
+
+  it("does not expose response items consumed by a compacted checkpoint", () => {
+    const summary = "## Handoff Summary\n\n### Current User Request\n当前任务摘要。";
+    const jsonl = [
+      JSON.stringify({ timestamp: "2026-06-03T15:30:00.000Z", type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: summary }] } }),
+      JSON.stringify({ timestamp: "2026-06-03T15:30:00.100Z", type: "event_msg", payload: { type: "token_count", info: {} } }),
+      JSON.stringify({ timestamp: "2026-06-03T15:30:00.200Z", type: "compacted", payload: { message: "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n" + summary } }),
+      JSON.stringify({ timestamp: "2026-06-03T15:30:01.000Z", type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "这次查清楚了：compacted checkpoint 里的 handoff summary 不应进入 transcript。" }] } })
+    ].join("\n");
+
+    const messages = readCodexJsonlMessages(jsonl, "thread-1");
+
+    expect(messages.map((message) => message.text)).toEqual([
+      "这次查清楚了：compacted checkpoint 里的 handoff summary 不应进入 transcript。"
     ]);
   });
 
@@ -1705,7 +1781,7 @@ describe("codex session manager", () => {
     ]);
   });
 
-  it("responds to command approval decline and steers the provided adjustment into the active turn", async () => {
+  it("sends command approval responses before steering decline adjustments", async () => {
     const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
     const manager = createCodexSessionManager({
       request: async (method, params) => {
@@ -1735,6 +1811,76 @@ describe("codex session manager", () => {
           threadId: "thread-1",
           expectedTurnId: "turn-1",
           input: [{ type: "text", text: "先跑定向测试，不要跑全量测试", text_elements: [] }]
+        }
+      }
+    ]);
+  });
+
+  it("steers command approval decline adjustments when the approval params use snake case turn ids", async () => {
+    const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
+    const manager = createCodexSessionManager({
+      request: async (method, params) => {
+        calls.push({ kind: "request", method, params: params ?? {} });
+        return {};
+      },
+      respond: (id, result) => {
+        calls.push({ kind: "respond", id, result });
+      }
+    });
+
+    manager.recordApprovalRequest({
+      id: "approval-snake-turn",
+      method: "item/commandExecution/requestApproval",
+      params: { threadId: "thread-1", turn_id: "turn-snake", command: "date" }
+    });
+    await manager.respondToApproval("approval-snake-turn", "decline", {
+      reason: { answers: ["不要运行命令，改用文字说明"] }
+    });
+
+    expect(calls).toEqual([
+      { kind: "respond", id: "approval-snake-turn", result: { decision: "decline" } },
+      {
+        kind: "request",
+        method: "turn/steer",
+        params: {
+          threadId: "thread-1",
+          expectedTurnId: "turn-snake",
+          input: [{ type: "text", text: "不要运行命令，改用文字说明", text_elements: [] }]
+        }
+      }
+    ]);
+  });
+
+  it("steers command approval decline adjustments when thread and turn ids use snake case", async () => {
+    const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
+    const manager = createCodexSessionManager({
+      request: async (method, params) => {
+        calls.push({ kind: "request", method, params: params ?? {} });
+        return {};
+      },
+      respond: (id, result) => {
+        calls.push({ kind: "respond", id, result });
+      }
+    });
+
+    manager.recordApprovalRequest({
+      id: "approval-snake-session-turn",
+      method: "item/commandExecution/requestApproval",
+      params: { thread_id: "thread-snake", turn_id: "turn-snake", command: "date" }
+    });
+    await manager.respondToApproval("approval-snake-session-turn", "decline", {
+      reason: { answers: ["不要运行命令，改用文字说明"] }
+    });
+
+    expect(calls).toEqual([
+      { kind: "respond", id: "approval-snake-session-turn", result: { decision: "decline" } },
+      {
+        kind: "request",
+        method: "turn/steer",
+        params: {
+          threadId: "thread-snake",
+          expectedTurnId: "turn-snake",
+          input: [{ type: "text", text: "不要运行命令，改用文字说明", text_elements: [] }]
         }
       }
     ]);

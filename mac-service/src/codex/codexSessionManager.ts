@@ -89,6 +89,13 @@ interface PendingApprovalRecord {
   params: Record<string, unknown>;
 }
 
+const APPROVAL_DEBUG_LOGS_ENABLED = process.env.CODE_REMOTE_APPROVAL_DEBUG === "1";
+
+function logApprovalDebug(message: string, details: Record<string, unknown>): void {
+  if (!APPROVAL_DEBUG_LOGS_ENABLED) return;
+  console.log(message, details);
+}
+
 export interface CodexThreadMetadata {
   title: string | null;
   firstUserMessage: string | null;
@@ -145,15 +152,24 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 function approvalThreadId(params: Record<string, unknown>): string | null {
-  return stringOrNull(params.threadId) ?? stringOrNull(params.sessionId) ?? stringOrNull(params.conversationId);
+  return stringOrNull(params.threadId) ?? stringOrNull(params.thread_id) ??
+    stringOrNull(params.sessionId) ?? stringOrNull(params.session_id) ??
+    stringOrNull(params.conversationId) ?? stringOrNull(params.conversation_id);
 }
 
 function approvalTurnId(params: Record<string, unknown>): string | null {
   const turn = asRecord(params.turn);
-  return stringOrNull(params.turnId) ?? stringOrNull(turn.id) ?? stringOrNull(turn.turnId);
+  return stringOrNull(params.turnId) ?? stringOrNull(params.turn_id) ?? stringOrNull(turn.id) ??
+    stringOrNull(turn.turnId) ?? stringOrNull(turn.turn_id);
 }
 
 const APPROVAL_ADJUSTMENT_ACTIONS = new Set(["decline", "reject", "deny", "disallow", "no", "cancel", "dismiss", "abort"]);
+const APPROVAL_ADJUSTMENT_METHODS = new Set<CodexServerRequestMethod>([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "execCommandApproval",
+  "applyPatchApproval"
+]);
 
 function firstApprovalAnswerText(answers: CodexApprovalAnswers | undefined, fieldId: string): string {
   if (!answers) return "";
@@ -181,7 +197,7 @@ function approvalAdjustmentTextFromAnswers(answers: CodexApprovalAnswers | undef
 }
 
 function shouldSteerApprovalAdjustment(method: CodexServerRequestMethod, actionId: string, answers: CodexApprovalAnswers | undefined): boolean {
-  if (method !== "item/commandExecution/requestApproval" && method !== "item/fileChange/requestApproval") return false;
+  if (!APPROVAL_ADJUSTMENT_METHODS.has(method)) return false;
   if (!APPROVAL_ADJUSTMENT_ACTIONS.has(actionId)) return false;
   return approvalAdjustmentTextFromAnswers(answers).length > 0;
 }
@@ -750,6 +766,11 @@ export function readCodexJsonlPendingApproval(jsonl: string, sessionId: string):
       const timestamp = stringOrNull(entry.timestamp);
       const entryType = stringOrNull(entry.type);
       const payload = asRecord(entry.payload);
+      if (entryType === "turn_context") {
+        const turnId = stringOrNull(payload.turn_id) ?? stringOrNull(payload.turnId);
+        if (turnId !== null) latestTurnId = turnId;
+        continue;
+      }
       if (entryType === "event_msg") {
         const payloadType = stringOrNull(payload.type);
         const turnId = stringOrNull(payload.turn_id) ?? stringOrNull(payload.turnId);
@@ -835,13 +856,13 @@ export function readCodexJsonlPlanUpdates(jsonl: string, sessionId: string): Ses
 
 export function readCodexJsonlMessages(jsonl: string, sessionId: string): SessionMessage[] {
   const messages: SessionMessage[] = [];
-  const lines = jsonl.split("\n");
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index].trim();
-    if (line.length === 0) continue;
+  const entries = parseCodexJsonlEntries(jsonl);
+  const compactedResponseIndexes = compactedResponseItemIndexes(entries);
+  for (const parsed of entries) {
+    if (compactedResponseIndexes.has(parsed.index)) continue;
 
     try {
-      const entry = asRecord(JSON.parse(line) as unknown);
+      const entry = parsed.entry;
       if (stringOrNull(entry.type) !== "response_item") continue;
       const payload = asRecord(entry.payload);
       const payloadRole = stringOrNull(payload.role);
@@ -851,7 +872,7 @@ export function readCodexJsonlMessages(jsonl: string, sessionId: string): Sessio
       const message = messageFromCodexItem({
         sessionId,
         item: payload,
-        fallbackId: `${sessionId}:log:${index + 1}`,
+        fallbackId: `${sessionId}:log:${parsed.index + 1}`,
         createdAt
       });
       if (message) messages.push(message);
@@ -860,6 +881,63 @@ export function readCodexJsonlMessages(jsonl: string, sessionId: string): Sessio
     }
   }
   return messages;
+}
+
+interface ParsedCodexJsonlEntry {
+  index: number;
+  entry: Record<string, unknown>;
+}
+
+function parseCodexJsonlEntries(jsonl: string): ParsedCodexJsonlEntry[] {
+  const parsed: ParsedCodexJsonlEntry[] = [];
+  const lines = jsonl.split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index].trim();
+    if (line.length === 0) continue;
+    try {
+      parsed.push({
+        index,
+        entry: asRecord(JSON.parse(line) as unknown)
+      });
+    } catch {
+      continue;
+    }
+  }
+  return parsed;
+}
+
+function compactedResponseItemIndexes(entries: ParsedCodexJsonlEntry[]): Set<number> {
+  const result = new Set<number>();
+  for (let index = 0; index < entries.length; index++) {
+    const compactedMessage = compactedMessageText(entries[index].entry);
+    if (compactedMessage === null) continue;
+    for (let cursor = index - 1; cursor >= 0; cursor--) {
+      const candidate = entries[cursor].entry;
+      if (stringOrNull(candidate.type) === "compacted") break;
+      const responseText = assistantResponseText(candidate);
+      if (responseText === null) continue;
+      if (compactedMessage.trimEnd().endsWith(responseText.trim())) {
+        result.add(entries[cursor].index);
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+function compactedMessageText(entry: Record<string, unknown>): string | null {
+  if (stringOrNull(entry.type) !== "compacted") return null;
+  const payload = asRecord(entry.payload);
+  const message = stringOrNull(payload.message);
+  return message !== null ? message : null;
+}
+
+function assistantResponseText(entry: Record<string, unknown>): string | null {
+  if (stringOrNull(entry.type) !== "response_item") return null;
+  const payload = asRecord(entry.payload);
+  if (stringOrNull(payload.type) !== "message" || stringOrNull(payload.role) !== "assistant") return null;
+  const text = textFromCodexThreadItem(payload).trim();
+  return text.length > 0 ? text : null;
 }
 
 export function readCodexJsonlContextUsage(jsonl: string): { contextTokensUsed: number | null; contextWindowTokens: number | null } {
@@ -1111,7 +1189,7 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
   const readThreadMetadata = options.readThreadMetadata ?? ((threadIds: string[]): Map<string, CodexThreadMetadata> => {
     return readCodexThreadMetadataFromStateDb(threadIds, options.codexStateDbPath);
   });
-  const pendingApprovals = new Map<string, { method: CodexServerRequestMethod; params: Record<string, unknown> }>();
+  const pendingApprovals = new Map<string, PendingApprovalRecord>();
   const defaultRuntimeCapabilities: CodexRuntimeCapabilities = { supportsPermissionsProfile: false };
   const runtimeCapabilities = options.codexRuntimeCapabilities ?? defaultRuntimeCapabilities;
   const runtimeParamsForSession = async (
@@ -1229,28 +1307,60 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
     const turn = asRecord(turnResponse.turn ?? turnResponse);
     return { turnId: String(turn.id ?? turn.turnId), status: normalizeTurnStatus(turn.status) };
   };
-  const steerApprovalAdjustment = async (
-    request: { method: CodexServerRequestMethod; params: Record<string, unknown> },
+  const approvalAdjustmentInput = (
+    request: PendingApprovalRecord,
+    answers: CodexApprovalAnswers | undefined
+  ): { threadId: string; turnId: string | null; text: string } | null => {
+    const text = approvalAdjustmentTextFromAnswers(answers);
+    if (text.length === 0) return null;
+    const threadId = approvalThreadId(request.params);
+    if (threadId === null || threadId.length === 0) return null;
+    const turnId = approvalTurnId(request.params);
+    return { threadId, turnId, text };
+  };
+  const steerApprovalAdjustmentIntoActiveTurn = async (
+    request: PendingApprovalRecord,
+    answers: CodexApprovalAnswers | undefined
+  ): Promise<boolean> => {
+    const input = approvalAdjustmentInput(request, answers);
+    if (input === null || input.turnId === null || input.turnId.length === 0) return false;
+    try {
+      logApprovalDebug("[codex] approval adjustment steer attempt", {
+        requestId: request.id,
+        method: request.method,
+        threadId: input.threadId,
+        turnId: input.turnId
+      });
+      await client.request("turn/steer", {
+        threadId: input.threadId,
+        expectedTurnId: input.turnId,
+        input: textInput(input.text)
+      });
+      return true;
+    } catch (error) {
+      if (!isInactiveTurnSteerError(error)) throw error;
+      logApprovalDebug("[codex] approval adjustment steer inactive", {
+        requestId: request.id,
+        method: request.method,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        error: codexErrorMessage(error)
+      });
+      return false;
+    }
+  };
+  const startApprovalAdjustmentTurn = async (
+    request: PendingApprovalRecord,
     answers: CodexApprovalAnswers | undefined
   ): Promise<void> => {
-    const text = approvalAdjustmentTextFromAnswers(answers);
-    if (text.length === 0) return;
-    const threadId = approvalThreadId(request.params);
-    if (threadId === null || threadId.length === 0) return;
-    const turnId = approvalTurnId(request.params);
-    if (turnId !== null && turnId.length > 0) {
-      try {
-        await client.request("turn/steer", {
-          threadId,
-          expectedTurnId: turnId,
-          input: textInput(text)
-        });
-        return;
-      } catch (error) {
-        if (!isInactiveTurnSteerError(error)) throw error;
-      }
-    }
-    await startTurnInternal({ threadId, text });
+    const input = approvalAdjustmentInput(request, answers);
+    if (input === null) return;
+    logApprovalDebug("[codex] approval adjustment start turn", {
+      requestId: request.id,
+      method: request.method,
+      threadId: input.threadId
+    });
+    await startTurnInternal({ threadId: input.threadId, text: input.text });
   };
   const createThread = async (input: CreateCodexThreadInput): Promise<{ threadId: string }> => {
     const threadResponse = asRecord(await client.request("thread/start", {
@@ -1395,8 +1505,8 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
       return client.request("thread/name/set", { threadId: input.threadId, name: input.title });
     },
 
-    recordApprovalRequest(input: { id: string; method: CodexServerRequestMethod; params: Record<string, unknown> }): void {
-      pendingApprovals.set(input.id, { method: input.method, params: input.params });
+    recordApprovalRequest(input: PendingApprovalRecord): void {
+      pendingApprovals.set(input.id, { id: input.id, method: input.method, params: input.params });
     },
 
     forgetApprovalRequest(requestId: string): void {
@@ -1407,9 +1517,20 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
       const request = pendingApprovals.get(requestId);
       if (!request) throw new Error("审批请求不存在或已处理");
       const response = mapCodexApprovalResponse({ method: request.method, actionId, answers, params: request.params });
+      const shouldSteer = shouldSteerApprovalAdjustment(request.method, actionId, answers);
+      logApprovalDebug("[codex] approval respond", {
+        requestId,
+        method: request.method,
+        actionId,
+        threadId: approvalThreadId(request.params) ?? "",
+        turnId: approvalTurnId(request.params) ?? "",
+        adjustmentLength: approvalAdjustmentTextFromAnswers(answers).length,
+        shouldSteer
+      });
       client.respond(requestId, response);
-      if (shouldSteerApprovalAdjustment(request.method, actionId, answers)) {
-        await steerApprovalAdjustment(request, answers);
+      const didSteer = shouldSteer ? await steerApprovalAdjustmentIntoActiveTurn(request, answers) : false;
+      if (shouldSteer && !didSteer) {
+        await startApprovalAdjustmentTurn(request, answers);
       }
     }
   };

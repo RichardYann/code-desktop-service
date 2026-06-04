@@ -1297,6 +1297,7 @@ export function createCommandRouter(deps: {
 
       if (command.type === "approval.respond") {
         await deps.sessions.respondToApproval(command.approvalId, command.actionId, command.answers, command.sessionId);
+        deps.sessions.forgetApprovalRequest?.(command.approvalId);
       }
       return null;
     }
@@ -1341,6 +1342,22 @@ function delay(ms: number): Promise<void> {
 
 function desktopStateForThread(desktopFollower: CodexDesktopFollowerBridge | null, threadId: string): Record<string, unknown> | null {
   return desktopFollower?.getConversationState(threadId) ?? null;
+}
+
+function isRunningDesktopTurn(turn: Record<string, unknown>): boolean {
+  const nestedStatus = asRecord(turn.status);
+  const status = stringField(turn, "status") || stringField(nestedStatus, "type");
+  return status === "running" || status === "inProgress" || status === "in_progress";
+}
+
+function latestRunningDesktopTurnId(desktopState: Record<string, unknown>): string {
+  const turns = asArray(desktopState.turns);
+  for (let index = turns.length - 1; index >= 0; index--) {
+    const turn = asRecord(turns[index]);
+    if (!isRunningDesktopTurn(turn)) continue;
+    return stringField(turn, "id") || stringField(turn, "turnId") || stringField(turn, "turn_id");
+  }
+  return "";
 }
 
 function isTerminalTurn(turn: SessionTurn): boolean {
@@ -1463,6 +1480,27 @@ export function createFollowerAwareSessions(
     }
     return localSessions.readSessionDetail(threadId);
   };
+  const forwardDesktopApprovalAdjustment = async (
+    desktopState: Record<string, unknown>,
+    threadId: string,
+    actionId: string,
+    answers?: CodexApprovalAnswers
+  ): Promise<void> => {
+    const follower = desktopFollower;
+    if (!follower || !APPROVAL_ADJUSTMENT_ACTIONS.has(actionId)) return;
+    const text = approvalDeclineReasonFromAnswers(answers);
+    if (text.length === 0) return;
+    const turnId = latestRunningDesktopTurnId(desktopState);
+    if (turnId.length > 0) {
+      try {
+        unwrapIpcResponse(await follower.steerTurn({ threadId, turnId, text }));
+        return;
+      } catch (error) {
+        if (!isMissingThreadOrTurnError(error)) throw error;
+      }
+    }
+    unwrapIpcResponse(await follower.startTurn({ threadId, text }));
+  };
 
   return {
     ...(localSessions.createThread ? { createThread: (input: { projectPath: string | null; text: string }) => localSessions.createThread!(input) } : {}),
@@ -1549,13 +1587,16 @@ export function createFollowerAwareSessions(
     },
     async respondToApproval(approvalId: string, actionId: string, answers?: CodexApprovalAnswers, threadId?: string): Promise<unknown> {
       const desktopState = threadId ? desktopStateForThread(desktopFollower, threadId) : null;
-      if (threadId && desktopState) {
-        return unwrapIpcResponse(await desktopFollower?.respondToApproval({
+      const follower = desktopFollower;
+      if (threadId && desktopState && follower) {
+        const response = unwrapIpcResponse(await follower.respondToApproval({
           threadId,
           approvalId,
           actionId,
           answers: answers as Record<string, unknown> | undefined
         }));
+        await forwardDesktopApprovalAdjustment(desktopState, threadId, actionId, answers);
+        return response;
       }
       return localSessions.respondToApproval(approvalId, actionId, answers, threadId);
     }
@@ -1612,13 +1653,18 @@ function approvalDeclineReasonFromAnswers(answers: CodexApprovalAnswers | undefi
   return "";
 }
 
+const APPROVAL_ADJUSTMENT_ACTIONS = new Set(["decline", "reject", "deny", "disallow", "no", "cancel", "dismiss", "abort"]);
+
 function sessionIdFromParams(params: Record<string, unknown>): string {
-  return stringField(params, "threadId") || stringField(params, "sessionId") || stringField(params, "conversationId");
+  return stringField(params, "threadId") || stringField(params, "thread_id") ||
+    stringField(params, "sessionId") || stringField(params, "session_id") ||
+    stringField(params, "conversationId") || stringField(params, "conversation_id");
 }
 
 function turnIdFromParams(params: Record<string, unknown>): string {
   const turn = asRecord(params.turn);
-  return stringField(params, "turnId") || stringField(turn, "id") || stringField(turn, "turnId");
+  return stringField(params, "turnId") || stringField(params, "turn_id") ||
+    stringField(turn, "id") || stringField(turn, "turnId") || stringField(turn, "turn_id");
 }
 
 function requestIdFromParams(params: Record<string, unknown>): string {
@@ -2105,6 +2151,17 @@ function recordCommandAudit(input: { context: AppContext; deviceId: string; comm
   });
 }
 
+function diagnosticCommandField(raw: string, fieldName: string): string {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const command = asRecord(parsed);
+    const value = command[fieldName];
+    return typeof value === "string" ? value : "";
+  } catch {
+    return "";
+  }
+}
+
 async function handleClientMessage(
   socket: { send: (value: string) => void; close?: () => void },
   context: AppContext,
@@ -2128,6 +2185,13 @@ async function handleClientMessage(
     send(socket, { type: "command.failed", requestId: "invalid", errorCode: "BAD_REQUEST", message: "请求格式错误" });
     return;
   }
+  console.log("[ws] command parsed", {
+    deviceId,
+    type: parsed.data.type,
+    requestId: parsed.data.requestId,
+    sessionId: "sessionId" in parsed.data ? parsed.data.sessionId : "",
+    clientMessageId: "clientMessageId" in parsed.data ? parsed.data.clientMessageId : ""
+  });
   if (!context.pairing.isDeviceActive(deviceId)) {
     send(socket, { type: "command.failed", requestId: parsed.data.requestId, errorCode: "AUTH_INVALID", message: "授权失效，请重新配对" });
     socket.close?.();
@@ -2242,6 +2306,11 @@ async function handleClientMessage(
       invalidateSessionDetailSnapshot(state, detailInvalidationSessionId);
     }
 
+    console.log("[ws] command router begin", {
+      deviceId,
+      type: commandForRouter.type,
+      requestId: commandForRouter.requestId
+    });
     const result = await router.handle(commandForRouter, (failure) => {
       const failureEvent = {
         type: "command.failed",
@@ -2265,7 +2334,23 @@ async function handleClientMessage(
         send(socket, event);
       }
     });
+    console.log("[ws] command router end", {
+      deviceId,
+      type: commandForRouter.type,
+      requestId: commandForRouter.requestId,
+      kind: result?.kind ?? ""
+    });
     recordCommandAudit({ context, deviceId, command: parsed.data, rawCommand, result: "success", routerResult: result });
+    if (parsed.data.type === "approval.respond") {
+      const event = {
+        type: "approval.updated",
+        sessionId: parsed.data.sessionId,
+        approval: null
+      };
+      broadcastSessionUpdatedForApprovalState(context, state, parsed.data.sessionId, null);
+      broadcastSharedRuntimeEvent(state, event);
+      return;
+    }
     if (!result) return;
 
     if (result.kind === "session.created") {
@@ -3601,9 +3686,24 @@ export function registerWsServer(app: FastifyInstance, context: AppContext): voi
 
     socket.on("message", (message: { toString(encoding?: BufferEncoding): string }) => {
       const raw = message.toString("utf8");
+      console.log("[ws] raw command received", {
+        deviceId: device.id,
+        type: diagnosticCommandField(raw, "type"),
+        requestId: diagnosticCommandField(raw, "requestId"),
+        sessionId: diagnosticCommandField(raw, "sessionId"),
+        clientMessageId: diagnosticCommandField(raw, "clientMessageId")
+      });
       commandQueue = commandQueue
         .then(async () => {
+          console.log("[ws] waiting runtime", {
+            deviceId: device.id,
+            requestId: diagnosticCommandField(raw, "requestId")
+          });
           const runtime = await runtimePromise;
+          console.log("[ws] runtime ready", {
+            deviceId: device.id,
+            requestId: diagnosticCommandField(raw, "requestId")
+          });
           await handleClientMessage(socket, context, runtime.router, subscriber, device.id, raw, sharedRuntime, runtime.routerSessions);
         })
         .catch((error) => {

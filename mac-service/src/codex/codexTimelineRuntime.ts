@@ -74,12 +74,15 @@ function diffStatus(value: unknown): DiffFileOverview["status"] {
 }
 
 function sessionIdFromParams(params: Record<string, unknown>): string {
-  return stringField(params, "threadId") || stringField(params, "sessionId") || stringField(params, "conversationId");
+  return stringField(params, "threadId") || stringField(params, "thread_id") ||
+    stringField(params, "sessionId") || stringField(params, "session_id") ||
+    stringField(params, "conversationId") || stringField(params, "conversation_id");
 }
 
 function turnIdFromParams(params: Record<string, unknown>): string {
   const turn = asRecord(params.turn);
-  return stringField(params, "turnId") || stringField(turn, "id") || stringField(turn, "turnId");
+  return stringField(params, "turnId") || stringField(params, "turn_id") ||
+    stringField(turn, "id") || stringField(turn, "turnId") || stringField(turn, "turn_id");
 }
 
 function itemRecordFromParams(params: Record<string, unknown>): Record<string, unknown> {

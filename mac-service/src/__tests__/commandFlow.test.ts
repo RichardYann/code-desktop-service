@@ -408,7 +408,7 @@ describe("command flow", () => {
     });
   });
 
-  it("forwards command approval decline reasons through active-turn steering after the official response", async () => {
+  it("sends command approval responses before forwarding decline reasons through active-turn steering", async () => {
     const events: string[] = [];
     const sessions = createCodexSessionManager({
       request: async (method, params) => {
@@ -445,6 +445,47 @@ describe("command flow", () => {
     ]);
     expect(sessions.readPendingApproval("thread-approval")).toMatchObject({
       id: "approval-decline-reason"
+    });
+  });
+
+  it("forwards legacy command approval decline reasons as follow-up turn input", async () => {
+    const events: string[] = [];
+    const sessions = createCodexSessionManager({
+      request: async (method, params) => {
+        const record = asRecord(params);
+        const input = Array.isArray(record.input) ? asRecord(record.input[0]) : {};
+        events.push(`request:${method}:${String(input.text ?? "")}`);
+        return {};
+      },
+      respond: (id, result) => {
+        events.push(`respond:${id}:${JSON.stringify(result)}`);
+      }
+    }, {
+      readThreadMetadata: async () => new Map([
+        ["thread-legacy-approval", { title: "审批会话", firstUserMessage: null }]
+      ])
+    });
+    sessions.recordApprovalRequest({
+      id: "legacy-approval-decline-reason",
+      method: "execCommandApproval",
+      params: {
+        conversationId: "thread-legacy-approval",
+        turnId: "turn-legacy-approval",
+        command: ["ps", "aux"],
+        reason: "requires escalated permissions"
+      }
+    });
+
+    await sessions.respondToApproval("legacy-approval-decline-reason", "decline", {
+      reason: { answers: ["请改成文字说明，不要运行系统进程命令"] }
+    });
+
+    expect(events).toEqual([
+      "respond:legacy-approval-decline-reason:{\"decision\":\"denied\"}",
+      "request:turn/steer:请改成文字说明，不要运行系统进程命令"
+    ]);
+    expect(sessions.readPendingApproval("thread-legacy-approval")).toMatchObject({
+      id: "legacy-approval-decline-reason"
     });
   });
 
@@ -3708,7 +3749,9 @@ describe("command flow", () => {
       "follower:compact:thread-desktop",
       "follower:approval:thread-desktop:approval-1:approve",
       "follower:approval:thread-desktop:approval-2:decline",
+      "follower:steer:thread-desktop:turn-follower:请改成只读方案",
       "follower:approval:thread-desktop:approval-3:cancel",
+      "follower:steer:thread-desktop:turn-follower:请先说明修改范围",
       "local:start"
     ]);
   });
@@ -5669,8 +5712,15 @@ describe("command flow", () => {
       statusLabel: "waiting_for_approval"
     });
 
-    notificationHandlers.get("serverRequest/resolved")?.({
-      serverRequest: { id: "approval-synced" }
+    sendCommand(ws, {
+      type: "approval.respond",
+      requestId: "r-approval-synced-respond",
+      sessionId: "thread-synced-approval",
+      approvalId: "approval-synced",
+      actionId: "decline",
+      answers: {
+        reason: { answers: ["请不要运行命令，改为文字说明"] }
+      }
     });
     await waitForWsMessage(messages, (message) => message.type === "approval.updated" &&
       message.sessionId === "thread-synced-approval" &&

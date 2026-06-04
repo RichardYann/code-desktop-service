@@ -199,6 +199,28 @@ describe("codex timeline runtime", () => {
     expect(resolvedEvents).toEqual([{ type: "approval.updated", sessionId: "thread-1", approval: null }]);
   });
 
+  it("maps approval requests that use snake case session and turn ids", () => {
+    const runtime = new CodexTimelineRuntime();
+    const approvalEvents = runtime.applyServerRequest("item/commandExecution/requestApproval", "approval-snake", {
+      thread_id: "thread-snake",
+      turn_id: "turn-snake",
+      command: "date"
+    });
+    const resolvedEvents = runtime.resolveServerRequest("approval-snake");
+
+    expect(approvalEvents).toEqual([{
+      type: "approval.updated",
+      sessionId: "thread-snake",
+      approval: expect.objectContaining({
+        id: "approval-snake",
+        kind: "command",
+        method: "item/commandExecution/requestApproval",
+        subject: "date"
+      })
+    }]);
+    expect(resolvedEvents).toEqual([{ type: "approval.updated", sessionId: "thread-snake", approval: null }]);
+  });
+
   it("maps legacy exec command approvals using conversation id", () => {
     const runtime = new CodexTimelineRuntime();
     const approvalEvents = runtime.applyServerRequest("execCommandApproval", "legacy-exec-approval", {
