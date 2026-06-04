@@ -101,7 +101,7 @@ describe("web management routes", () => {
     expect(response.body).toContain("manual-project-root-path");
     expect(response.body).toContain("add-project-root-path");
     expect(response.body).toContain("添加路径");
-    expect(response.body).toContain("C:\\\\Users\\\\52960\\\\Documents\\\\Codex");
+    expect(response.body).toContain("C:\\\\Users\\\\you\\\\Documents\\\\Codex");
     expect(response.body).toContain("项目根目录只用于移动端新建项目和创建新会话");
     expect(response.body).toContain('id="paired-devices" class="card-body device-list bounded-list"');
     expect(response.body).toContain('id="recent-media-assets" class="audit-list bounded-list"');
@@ -184,7 +184,7 @@ describe("web management routes", () => {
   });
 
   it("adds a Windows project root through the manual project-root API", async () => {
-    const windowsRoot = "C:\\Users\\52960\\Documents\\Codex";
+    const windowsRoot = "C:\\Users\\you\\Documents\\Codex";
     const statSpy = vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true } as fs.Stats);
     const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
     try {
@@ -278,11 +278,11 @@ describe("web management routes", () => {
       platform: "win32",
       run: async (file, args, options) => {
         calls.push({ file, args, timeout: options.timeout, windowsHide: options.windowsHide });
-        return { stdout: "C:\\Users\\52960\\Documents\\Codex\r\n", stderr: "" };
+        return { stdout: "C:\\Users\\you\\Documents\\Codex\r\n", stderr: "" };
       }
     });
 
-    expect(selected).toBe("C:\\Users\\52960\\Documents\\Codex");
+    expect(selected).toBe("C:\\Users\\you\\Documents\\Codex");
     expect(calls).toHaveLength(1);
     expect(calls[0].file).toBe("powershell.exe");
     expect(calls[0].args).toContain("-STA");
@@ -316,7 +316,7 @@ describe("web management routes", () => {
     expect(initial.json()).toMatchObject({
       supported: true,
       enabled: false,
-      label: "com.liuyongzhe.code.mac-service"
+      label: "com.code.desktop-service"
     });
 
     const enable = await server.inject({
@@ -746,7 +746,7 @@ describe("web management routes", () => {
         }
         if (url === "/api/startup" && options?.method === "PUT") {
           startupEnabled = Boolean(JSON.parse(options.body || "{}").enabled);
-          return { supported: true, enabled: startupEnabled, label: "com.liuyongzhe.code.mac-service" };
+          return { supported: true, enabled: startupEnabled, label: "com.code.desktop-service" };
         }
         if (url === "/api/health") {
           return {
@@ -799,7 +799,7 @@ describe("web management routes", () => {
         if (url === "/api/audit-logs") return { logs: [] };
         if (url === "/api/media-assets") return { totalSizeBytes: 0, assets: [] };
         if (url === "/api/local-web-sessions") return { sessions: [] };
-        if (url === "/api/startup") return { supported: true, enabled: startupEnabled, label: "com.liuyongzhe.code.mac-service" };
+        if (url === "/api/startup") return { supported: true, enabled: startupEnabled, label: "com.code.desktop-service" };
         if (url === "/api/pairing-ticket") {
           return {
             value: "123456",
@@ -852,7 +852,7 @@ describe("web management routes", () => {
     expect(elements.get("startup-status")?.textContent).toBe("已关闭");
 
     const manualProjectRootInput = elements.get("manual-project-root-path") as FakeInputElement;
-    manualProjectRootInput.value = "C:\\Users\\52960\\Documents\\Codex";
+    manualProjectRootInput.value = "C:\\Users\\you\\Documents\\Codex";
     elements.get("add-project-root-path")?.click();
     for (let index = 0; index < 20; index += 1) {
       await Promise.resolve();
@@ -861,7 +861,7 @@ describe("web management routes", () => {
     expect(fetch).toHaveBeenCalledWith("/api/project-roots", expect.objectContaining({
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: "C:\\Users\\52960\\Documents\\Codex" })
+      body: JSON.stringify({ path: "C:\\Users\\you\\Documents\\Codex" })
     }));
     expect(manualProjectRootInput.value).toBe("");
     expect(elements.get("project-root-status")?.textContent).toBe("项目根目录已保存，移动端刷新项目后可选择该根目录创建项目或新会话。");
@@ -1049,7 +1049,7 @@ describe("web management routes", () => {
         if (url === "/api/project-roots") return { roots: [] };
         if (url === "/api/audit-logs") return { logs: [] };
         if (url === "/api/local-web-sessions") return { sessions: [] };
-        if (url === "/api/startup") return { supported: true, enabled: false, label: "com.liuyongzhe.code.mac-service" };
+        if (url === "/api/startup") return { supported: true, enabled: false, label: "com.code.desktop-service" };
         if (url === "/api/media-assets" && options?.method !== "DELETE") {
           return {
             totalSizeBytes: 8,

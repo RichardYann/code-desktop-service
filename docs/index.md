@@ -1,22 +1,24 @@
 ---
-title: Code Remote Public Documents
+title: code Desktop Service Documents
 ---
 
-# Code Remote Public Documents
+# code Desktop Service Documents
 
-This site hosts public documents for Code Remote and `code-desktop-service`.
+This site hosts public user-facing documents for `code-desktop-service`.
 
-## AppGallery Links
+## Documents
 
+- [Desktop Service Install Guide](./desktop-service-install-guide.html)
 - [中文隐私政策](./privacy-policy-zh.html)
 - [English Privacy Policy](./privacy-policy-en.html)
-- [桌面服务安装与配对说明](./desktop-service-install-guide.html)
+- [v0.1.0 Preview Release Notes](./releases/v0.1.0-preview.html)
 
 ## Repository
 
 - [GitHub repository](https://github.com/lyz1022/code-desktop-service)
 - [GitHub Releases](https://github.com/lyz1022/code-desktop-service/releases)
 
-## Notes
+## Note
 
-Code Remote is not an official OpenAI, Codex, Anthropic, or Claude application. It is a remote client for a desktop service installed and paired by the user.
+`code-desktop-service` and its paired mobile client are not official OpenAI or
+Codex applications. The desktop service is installed and paired by the user.

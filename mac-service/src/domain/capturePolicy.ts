@@ -15,7 +15,7 @@ export interface CaptureValidationResult {
 
 export function validateCaptureRequest(input: CaptureRequest): CaptureValidationResult {
   if (input.kind === "screenRecording" || input.kind === "localWebRecording") {
-    return { ok: false, message: "V2 不支持录屏生成，已列入后评估" };
+    return { ok: false, message: "当前版本暂不支持录制" };
   }
   if (!input.userConfirmed) {
     return { ok: false, message: "截图需要用户确认后才能执行" };

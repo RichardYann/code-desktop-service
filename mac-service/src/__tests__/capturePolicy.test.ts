@@ -23,7 +23,7 @@ describe("capturePolicy", () => {
     expect(result.message).toContain("需要用户确认");
   });
 
-  it("rejects recording requests in v2", () => {
+  it("rejects recording requests when recording is unsupported", () => {
     const result = validateCaptureRequest({
       kind: "screenRecording",
       targetUrl: null,
@@ -31,6 +31,6 @@ describe("capturePolicy", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.message).toContain("V2 不支持录屏");
+    expect(result.message).toContain("暂不支持录制");
   });
 });

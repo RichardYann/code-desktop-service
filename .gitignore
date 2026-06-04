@@ -7,6 +7,13 @@
 tmp/
 mac-service/tmp/
 
+# Private/mobile workspace content that does not belong in this service repo
+app/
+docs/appgallery-submission/
+docs/implementation/
+docs/product/
+docs/superpowers/
+
 # Dependencies
 node_modules/
 oh_modules/

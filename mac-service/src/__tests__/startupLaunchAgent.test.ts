@@ -29,7 +29,7 @@ describe("startup launch agent service", () => {
     expect(await service.status()).toMatchObject({
       supported: true,
       enabled: false,
-      label: "com.liuyongzhe.code.mac-service"
+      label: "com.code.desktop-service"
     });
 
     const enabled = await service.setEnabled(true);
