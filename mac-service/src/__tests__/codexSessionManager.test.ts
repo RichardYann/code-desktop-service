@@ -1781,7 +1781,7 @@ describe("codex session manager", () => {
     ]);
   });
 
-  it("sends command approval responses before steering decline adjustments", async () => {
+  it("responds to command approval declines without starting follow-up input in the manager", async () => {
     const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
     const manager = createCodexSessionManager({
       request: async (method, params) => {
@@ -1803,20 +1803,11 @@ describe("codex session manager", () => {
     });
 
     expect(calls).toEqual([
-      { kind: "respond", id: "approval-1", result: { decision: "decline" } },
-      {
-        kind: "request",
-        method: "turn/steer",
-        params: {
-          threadId: "thread-1",
-          expectedTurnId: "turn-1",
-          input: [{ type: "text", text: "先跑定向测试，不要跑全量测试", text_elements: [] }]
-        }
-      }
+      { kind: "respond", id: "approval-1", result: { decision: "decline" } }
     ]);
   });
 
-  it("steers command approval decline adjustments when the approval params use snake case turn ids", async () => {
+  it("responds to snake-case command approval declines without manager-side follow-up input", async () => {
     const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
     const manager = createCodexSessionManager({
       request: async (method, params) => {
@@ -1838,20 +1829,11 @@ describe("codex session manager", () => {
     });
 
     expect(calls).toEqual([
-      { kind: "respond", id: "approval-snake-turn", result: { decision: "decline" } },
-      {
-        kind: "request",
-        method: "turn/steer",
-        params: {
-          threadId: "thread-1",
-          expectedTurnId: "turn-snake",
-          input: [{ type: "text", text: "不要运行命令，改用文字说明", text_elements: [] }]
-        }
-      }
+      { kind: "respond", id: "approval-snake-turn", result: { decision: "decline" } }
     ]);
   });
 
-  it("steers command approval decline adjustments when thread and turn ids use snake case", async () => {
+  it("responds to snake-case thread and turn approval declines without manager-side follow-up input", async () => {
     const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
     const manager = createCodexSessionManager({
       request: async (method, params) => {
@@ -1873,20 +1855,11 @@ describe("codex session manager", () => {
     });
 
     expect(calls).toEqual([
-      { kind: "respond", id: "approval-snake-session-turn", result: { decision: "decline" } },
-      {
-        kind: "request",
-        method: "turn/steer",
-        params: {
-          threadId: "thread-snake",
-          expectedTurnId: "turn-snake",
-          input: [{ type: "text", text: "不要运行命令，改用文字说明", text_elements: [] }]
-        }
-      }
+      { kind: "respond", id: "approval-snake-session-turn", result: { decision: "decline" } }
     ]);
   });
 
-  it("responds to cancel approval reasons and steers adjustments into their active turns", async () => {
+  it("responds to cancel approval reasons without manager-side follow-up input", async () => {
     const calls: Array<{ kind: string; id?: string; result?: unknown; method?: string; params?: Record<string, unknown> }> = [];
     const manager = createCodexSessionManager({
       request: async (method, params) => {
@@ -1918,25 +1891,7 @@ describe("codex session manager", () => {
 
     expect(calls).toEqual([
       { kind: "respond", id: "command-approval", result: { decision: "cancel" } },
-      {
-        kind: "request",
-        method: "turn/steer",
-        params: {
-          threadId: "thread-1",
-          expectedTurnId: "turn-1",
-          input: [{ type: "text", text: "改成只运行定向测试", text_elements: [] }]
-        }
-      },
-      { kind: "respond", id: "file-approval", result: { decision: "cancel" } },
-      {
-        kind: "request",
-        method: "turn/steer",
-        params: {
-          threadId: "thread-1",
-          expectedTurnId: "turn-2",
-          input: [{ type: "text", text: "先给出补丁摘要，不要直接写文件", text_elements: [] }]
-        }
-      }
+      { kind: "respond", id: "file-approval", result: { decision: "cancel" } }
     ]);
   });
 

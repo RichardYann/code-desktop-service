@@ -3,7 +3,11 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import type { AppContext } from "../appContext.js";
 import type { CodexNotificationMethod, CodexServerRequestMethod } from "../codex/codexAppServerProtocol.js";
-import type { CodexApprovalAnswers } from "../codex/codexApprovalMapper.js";
+import {
+  approvalAdjustmentTextFromAnswers,
+  shouldStartApprovalAdjustmentFollowup,
+  type CodexApprovalAnswers
+} from "../codex/codexApprovalMapper.js";
 import { sessionDetailFromDesktopConversationState } from "../codex/codexDesktopStateMapper.js";
 import { readCodexThreadMetadataFromStateDb, type CodexTurnInputSource, type SessionDetail, type SessionMessage } from "../codex/codexSessionManager.js";
 import type { SessionTurn, TimelineItem, TimelineItemStatus } from "../codex/codexTimelineMapper.js";
@@ -482,6 +486,20 @@ type BackgroundTurnStarted = {
   status: string;
 };
 
+type PendingApprovalRequest = {
+  id: string;
+  method: CodexServerRequestMethod;
+  params: Record<string, unknown>;
+};
+
+type PendingApprovalAdjustmentFollowup = {
+  approvalId: string;
+  sessionId: string;
+  turnId: string;
+  text: string;
+  resolved: boolean;
+};
+
 function readStartedTurn(value: unknown): { turnId: string; status: string } | null {
   const record = asRecord(value);
   let turnRecord = record;
@@ -519,6 +537,8 @@ export function createCommandRouter(deps: {
   capture?: AppContext["capture"];
 }) {
   const turnInputLifecycle = new CodexTurnInputLifecycleService();
+  const pendingApprovalRequests = new Map<string, PendingApprovalRequest>();
+  const pendingApprovalAdjustmentFollowups = new Map<string, PendingApprovalAdjustmentFollowup>();
 
   function guidedText(command: { text: string; guidance?: z.infer<typeof SessionInputGuidanceSchema> }): string {
     return buildGuidedInput({
@@ -783,6 +803,43 @@ export function createCommandRouter(deps: {
     return { ...withSessionId, turnId: activeTurnId };
   }
 
+  function queueApprovalAdjustmentFollowup(command: {
+    approvalId: string;
+    actionId: string;
+    answers?: CodexApprovalAnswers;
+    sessionId: string;
+  }): void {
+    const request = pendingApprovalRequests.get(command.approvalId);
+    if (!request) return;
+    if (!shouldStartApprovalAdjustmentFollowup({
+      method: request.method,
+      actionId: command.actionId,
+      answers: command.answers,
+      params: request.params
+    })) return;
+    const text = approvalAdjustmentTextFromAnswers(command.answers);
+    const sessionId = sessionIdFromParams(request.params) || command.sessionId;
+    if (sessionId.length === 0 || text.length === 0) return;
+    pendingApprovalAdjustmentFollowups.set(command.approvalId, {
+      approvalId: command.approvalId,
+      sessionId,
+      turnId: turnIdFromParams(request.params),
+      text,
+      resolved: false
+    });
+  }
+
+  function nextApprovalAdjustmentFollowup(sessionId: string, terminalTurnId?: string): [string, PendingApprovalAdjustmentFollowup] | null {
+    for (const [approvalId, followup] of pendingApprovalAdjustmentFollowups.entries()) {
+      if (followup.sessionId !== sessionId) continue;
+      if (!followup.resolved) continue;
+      if (followup.turnId.length > 0 && terminalTurnId && followup.turnId !== terminalTurnId) continue;
+      if (followup.turnId.length > 0 && !terminalTurnId) continue;
+      return [approvalId, followup];
+    }
+    return null;
+  }
+
   async function ensureRuntimeConfigBaseline(sessionId: string): Promise<void> {
     if (!deps.runtimeConfig || !deps.runtimeConfigBaseline) return;
     if (deps.runtimeConfig.hasUserOverride(sessionId) || deps.runtimeConfig.hasCodexSessionConfig(sessionId)) return;
@@ -842,6 +899,11 @@ export function createCommandRouter(deps: {
 
     noteApprovalRequest(input: { id: string; method: CodexServerRequestMethod; params: Record<string, unknown> }): Record<string, unknown> {
       const params = approvalParamsWithActiveTurnFallback(input.params);
+      pendingApprovalRequests.set(input.id, {
+        id: input.id,
+        method: input.method,
+        params
+      });
       deps.sessions.recordApprovalRequest?.({
         id: input.id,
         method: input.method,
@@ -851,7 +913,42 @@ export function createCommandRouter(deps: {
     },
 
     noteApprovalResolved(approvalId: string): void {
+      const followup = pendingApprovalAdjustmentFollowups.get(approvalId);
+      if (followup) {
+        pendingApprovalAdjustmentFollowups.set(approvalId, { ...followup, resolved: true });
+      }
+      pendingApprovalRequests.delete(approvalId);
       deps.sessions.forgetApprovalRequest?.(approvalId);
+    },
+
+    async startApprovalAdjustmentFollowupAfterTerminal(sessionId: string, terminalTurnId?: string): Promise<BackgroundTurnStarted | null> {
+      if (!turnInputLifecycle.canStartNewTurn(sessionId)) return null;
+      const entry = nextApprovalAdjustmentFollowup(sessionId, terminalTurnId);
+      if (!entry) return null;
+      const [approvalId, followup] = entry;
+      pendingApprovalAdjustmentFollowups.delete(approvalId);
+      const previousTurnId = turnInputLifecycle.activeTurnId(sessionId);
+      turnInputLifecycle.noteTurnStartRequested(sessionId);
+      try {
+        const started = await deps.sessions.startTurn({
+          threadId: sessionId,
+          text: followup.text
+        });
+        const startedTurn = readStartedTurn(started);
+        if (startedTurn !== null) {
+          turnInputLifecycle.noteTurnStartedFromStartResponse(sessionId, startedTurn.turnId, previousTurnId);
+          return { sessionId, turnId: startedTurn.turnId, status: startedTurn.status };
+        }
+        turnInputLifecycle.noteTurnStartFailed(sessionId);
+      } catch (error) {
+        if (isIndeterminateCodexTurnRequestTimeout(error)) {
+          return null;
+        }
+        turnInputLifecycle.noteTurnStartFailed(sessionId);
+        pendingApprovalAdjustmentFollowups.set(approvalId, followup);
+        throw error;
+      }
+      return null;
     },
 
     async handle(
@@ -1297,7 +1394,12 @@ export function createCommandRouter(deps: {
 
       if (command.type === "approval.respond") {
         await deps.sessions.respondToApproval(command.approvalId, command.actionId, command.answers, command.sessionId);
-        deps.sessions.forgetApprovalRequest?.(command.approvalId);
+        queueApprovalAdjustmentFollowup({
+          approvalId: command.approvalId,
+          actionId: command.actionId,
+          answers: command.answers,
+          sessionId: command.sessionId
+        });
       }
       return null;
     }
@@ -1342,22 +1444,6 @@ function delay(ms: number): Promise<void> {
 
 function desktopStateForThread(desktopFollower: CodexDesktopFollowerBridge | null, threadId: string): Record<string, unknown> | null {
   return desktopFollower?.getConversationState(threadId) ?? null;
-}
-
-function isRunningDesktopTurn(turn: Record<string, unknown>): boolean {
-  const nestedStatus = asRecord(turn.status);
-  const status = stringField(turn, "status") || stringField(nestedStatus, "type");
-  return status === "running" || status === "inProgress" || status === "in_progress";
-}
-
-function latestRunningDesktopTurnId(desktopState: Record<string, unknown>): string {
-  const turns = asArray(desktopState.turns);
-  for (let index = turns.length - 1; index >= 0; index--) {
-    const turn = asRecord(turns[index]);
-    if (!isRunningDesktopTurn(turn)) continue;
-    return stringField(turn, "id") || stringField(turn, "turnId") || stringField(turn, "turn_id");
-  }
-  return "";
 }
 
 function isTerminalTurn(turn: SessionTurn): boolean {
@@ -1480,28 +1566,6 @@ export function createFollowerAwareSessions(
     }
     return localSessions.readSessionDetail(threadId);
   };
-  const forwardDesktopApprovalAdjustment = async (
-    desktopState: Record<string, unknown>,
-    threadId: string,
-    actionId: string,
-    answers?: CodexApprovalAnswers
-  ): Promise<void> => {
-    const follower = desktopFollower;
-    if (!follower || !APPROVAL_ADJUSTMENT_ACTIONS.has(actionId)) return;
-    const text = approvalDeclineReasonFromAnswers(answers);
-    if (text.length === 0) return;
-    const turnId = latestRunningDesktopTurnId(desktopState);
-    if (turnId.length > 0) {
-      try {
-        unwrapIpcResponse(await follower.steerTurn({ threadId, turnId, text }));
-        return;
-      } catch (error) {
-        if (!isMissingThreadOrTurnError(error)) throw error;
-      }
-    }
-    unwrapIpcResponse(await follower.startTurn({ threadId, text }));
-  };
-
   return {
     ...(localSessions.createThread ? { createThread: (input: { projectPath: string | null; text: string }) => localSessions.createThread!(input) } : {}),
     createSession: (input) => localSessions.createSession(input),
@@ -1589,14 +1653,12 @@ export function createFollowerAwareSessions(
       const desktopState = threadId ? desktopStateForThread(desktopFollower, threadId) : null;
       const follower = desktopFollower;
       if (threadId && desktopState && follower) {
-        const response = unwrapIpcResponse(await follower.respondToApproval({
+        return unwrapIpcResponse(await follower.respondToApproval({
           threadId,
           approvalId,
           actionId,
           answers: answers as Record<string, unknown> | undefined
         }));
-        await forwardDesktopApprovalAdjustment(desktopState, threadId, actionId, answers);
-        return response;
       }
       return localSessions.respondToApproval(approvalId, actionId, answers, threadId);
     }
@@ -1652,8 +1714,6 @@ function approvalDeclineReasonFromAnswers(answers: CodexApprovalAnswers | undefi
   }
   return "";
 }
-
-const APPROVAL_ADJUSTMENT_ACTIONS = new Set(["decline", "reject", "deny", "disallow", "no", "cancel", "dismiss", "abort"]);
 
 function sessionIdFromParams(params: Record<string, unknown>): string {
   return stringField(params, "threadId") || stringField(params, "thread_id") ||
@@ -3312,6 +3372,26 @@ async function startNextQueuedInputsForTerminalTurns(
   }
 }
 
+async function startApprovalAdjustmentFollowupsForTerminalTurns(
+  state: SharedCodexRuntimeState,
+  router: ReturnType<typeof createCommandRouter>,
+  events: TimelineRuntimeEvent[]
+): Promise<void> {
+  for (const terminalTurn of terminalTurnsFromRuntimeEvents(events)) {
+    const started = await router.startApprovalAdjustmentFollowupAfterTerminal(
+      terminalTurn.sessionId,
+      terminalTurn.turnId
+    );
+    if (started === null) continue;
+    broadcastSharedRuntimeEvent(state, {
+      type: "turn.status.updated",
+      sessionId: started.sessionId,
+      turnId: started.turnId,
+      status: started.status
+    });
+  }
+}
+
 function desktopTurnStatus(value: unknown): string {
   if (value === "inProgress") return "running";
   return typeof value === "string" ? value : "";
@@ -3398,6 +3478,7 @@ function getSharedCodexRuntime(context: AppContext): SharedCodexRuntimeState {
         broadcastSharedRuntimeEvent(state, event);
       }, commandRouter, (events) => {
         void (async () => {
+          await startApprovalAdjustmentFollowupsForTerminalTurns(state, commandRouter, events);
           await startNextQueuedInputsForTerminalTurns(context, state, sessions, commandRouter, events);
           try {
             await pushFinalDetailSnapshotsForTerminalTurns(context, state, sessions, events);

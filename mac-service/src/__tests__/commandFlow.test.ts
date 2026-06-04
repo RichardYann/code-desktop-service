@@ -408,7 +408,7 @@ describe("command flow", () => {
     });
   });
 
-  it("sends command approval responses before forwarding decline reasons through active-turn steering", async () => {
+  it("keeps command approval decline reasons out of manager-side active-turn steering", async () => {
     const events: string[] = [];
     const sessions = createCodexSessionManager({
       request: async (method, params) => {
@@ -440,15 +440,14 @@ describe("command flow", () => {
     });
 
     expect(events).toEqual([
-      "respond:approval-decline-reason:{\"decision\":\"decline\"}",
-      "request:turn/steer:请改成只读检查"
+      "respond:approval-decline-reason:{\"decision\":\"decline\"}"
     ]);
     expect(sessions.readPendingApproval("thread-approval")).toMatchObject({
       id: "approval-decline-reason"
     });
   });
 
-  it("forwards legacy command approval decline reasons as follow-up turn input", async () => {
+  it("keeps legacy command approval decline reasons out of manager-side steering", async () => {
     const events: string[] = [];
     const sessions = createCodexSessionManager({
       request: async (method, params) => {
@@ -481,8 +480,7 @@ describe("command flow", () => {
     });
 
     expect(events).toEqual([
-      "respond:legacy-approval-decline-reason:{\"decision\":\"denied\"}",
-      "request:turn/steer:请改成文字说明，不要运行系统进程命令"
+      "respond:legacy-approval-decline-reason:{\"decision\":\"denied\"}"
     ]);
     expect(sessions.readPendingApproval("thread-legacy-approval")).toMatchObject({
       id: "legacy-approval-decline-reason"
@@ -3669,7 +3667,7 @@ describe("command flow", () => {
     ws.terminate();
   });
 
-  it("routes desktop-owned session actions through follower-only IPC bridge", async () => {
+  it("routes desktop-owned session actions through follower-only IPC bridge without immediate approval follow-up steering", async () => {
     const calls: string[] = [];
     const localSessions = createRuntime({
       readSessionDetail: async () => {
@@ -3749,10 +3747,97 @@ describe("command flow", () => {
       "follower:compact:thread-desktop",
       "follower:approval:thread-desktop:approval-1:approve",
       "follower:approval:thread-desktop:approval-2:decline",
-      "follower:steer:thread-desktop:turn-follower:请改成只读方案",
       "follower:approval:thread-desktop:approval-3:cancel",
-      "follower:steer:thread-desktop:turn-follower:请先说明修改范围",
       "local:start"
+    ]);
+  });
+
+  it("starts desktop follower approval decline reasons only after request resolution and original turn terminal", async () => {
+    const calls: string[] = [];
+    const localSessions = createRuntime({
+      startTurn: async () => {
+        calls.push("local:start");
+        return { turnId: "turn-local", status: "running" };
+      },
+      respondToApproval: async () => {
+        calls.push("local:approval");
+      }
+    }).sessions;
+    const desktopFollower = {
+      getConversationState: (threadId: string) => {
+        if (threadId !== "thread-desktop-approval") return null;
+        return {
+          id: "thread-desktop-approval",
+          title: "Desktop approval thread",
+          createdAt: 1778600000000,
+          updatedAt: 1778600001000,
+          threadRuntimeStatus: { type: "idle" },
+          cwd: "/Users/me/project",
+          turns: [{ id: "turn-desktop-original", status: "interrupted" }]
+        };
+      },
+      startTurn: async (input: { threadId: string; text?: string; inputItems?: CodexTurnInputItem[] }) => {
+        calls.push(`follower:start:${input.threadId}:${turnInputText(input)}`);
+        return { type: "response", resultType: "success", result: { turnId: "turn-desktop-followup", status: "running" } };
+      },
+      steerTurn: async (input: { threadId: string; turnId: string; text?: string; inputItems?: CodexTurnInputItem[] }) => {
+        calls.push(`follower:steer:${input.threadId}:${input.turnId}:${turnInputText(input)}`);
+        return { type: "response", resultType: "success", result: { ok: true } };
+      },
+      interruptTurn: async () => ({ type: "response", resultType: "success", result: { ok: true } }),
+      respondToApproval: async (input: { threadId: string; approvalId: string; actionId: string; answers?: Record<string, unknown> }) => {
+        calls.push(`follower:approval:${input.threadId}:${input.approvalId}:${input.actionId}`);
+        return { type: "response", resultType: "success", result: { ok: true } };
+      },
+      compactContext: async () => ({ type: "response", resultType: "success", result: { ok: true } }),
+      stop: () => undefined
+    };
+    const sessions = createFollowerAwareSessions(localSessions, desktopFollower);
+    const router = createCommandRouter({ sessions });
+
+    router.noteTurnStarted("thread-desktop-approval", "turn-desktop-original");
+    router.noteApprovalRequest({
+      id: "approval-desktop-decline",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-desktop-approval",
+        turnId: "turn-desktop-original",
+        command: "date"
+      }
+    });
+
+    await router.handle({
+      type: "approval.respond",
+      requestId: "r-desktop-approval",
+      sessionId: "thread-desktop-approval",
+      approvalId: "approval-desktop-decline",
+      actionId: "decline",
+      answers: {
+        reason: { answers: ["不要运行命令，直接说明审批功能已触发并继续回复"] }
+      }
+    });
+
+    expect(calls).toEqual([
+      "follower:approval:thread-desktop-approval:approval-desktop-decline:decline"
+    ]);
+
+    router.noteApprovalResolved("approval-desktop-decline");
+    expect(await router.startApprovalAdjustmentFollowupAfterTerminal("thread-desktop-approval", "turn-not-original")).toBeNull();
+    expect(calls).toEqual([
+      "follower:approval:thread-desktop-approval:approval-desktop-decline:decline"
+    ]);
+
+    router.noteTurnCompleted("thread-desktop-approval", "turn-desktop-original");
+    const started = await router.startApprovalAdjustmentFollowupAfterTerminal("thread-desktop-approval", "turn-desktop-original");
+
+    expect(started).toEqual({
+      sessionId: "thread-desktop-approval",
+      turnId: "turn-desktop-followup",
+      status: "running"
+    });
+    expect(calls).toEqual([
+      "follower:approval:thread-desktop-approval:approval-desktop-decline:decline",
+      "follower:start:thread-desktop-approval:不要运行命令，直接说明审批功能已触发并继续回复"
     ]);
   });
 
@@ -5734,6 +5819,133 @@ describe("command flow", () => {
       needsUserInput: false,
       waitsForNextDirection: false
     });
+    ws.terminate();
+  });
+
+  it("starts approval decline reasons as follow-up input after the original turn reaches terminal", async () => {
+    const context = createTestAppContext();
+    const notificationHandlers = new Map<string, (params: Record<string, unknown>) => void>();
+    const serverRequestHandlers = new Map<CodexServerRequestMethod, (request: { id: string; method: CodexServerRequestMethod; params: Record<string, unknown> }) => void>();
+    const approvalResponses: Array<{ approvalId: string; result: unknown }> = [];
+    const turnRequests: Array<{ method: string; threadId: string; text: string }> = [];
+    const approvalManager = createCodexSessionManager({
+      request: async (method: string, params?: unknown) => {
+        const record = asRecord(params);
+        if (method === "turn/start" || method === "turn/steer") {
+          const input = Array.isArray(record.input) ? asRecord(record.input[0]) : {};
+          turnRequests.push({
+            method,
+            threadId: String(record.threadId ?? ""),
+            text: String(input.text ?? "")
+          });
+        }
+        if (method === "turn/start") return { turn: { id: "turn-approval-followup", status: "running" } };
+        return {};
+      },
+      respond: (approvalId, result) => {
+        approvalResponses.push({ approvalId, result });
+      }
+    }, {
+      readThreadMetadata: async () => new Map([
+        ["thread-approval-followup", { title: "审批接力测试", firstUserMessage: null }]
+      ])
+    });
+    context.codex.createSessionRuntime = async () => ({
+      ...createRuntime({
+        listSessionSummaries: async () => [],
+        readSessionDetail: async () => sessionDetail("thread-approval-followup"),
+        startTurn: async (input) => {
+          turnRequests.push({ method: "turn/start", threadId: input.threadId, text: turnInputText(input) });
+          return { turnId: "turn-approval-followup", status: "running" };
+        },
+        recordApprovalRequest: (input) => approvalManager.recordApprovalRequest(input),
+        readPendingApproval: (threadId) => approvalManager.readPendingApproval(threadId),
+        forgetApprovalRequest: (approvalId) => approvalManager.forgetApprovalRequest(approvalId),
+        respondToApproval: (approvalId, actionId, answers) => approvalManager.respondToApproval(approvalId, actionId, answers)
+      }),
+      client: {
+        initialize: async () => ({}),
+        request: async () => ({}),
+        respond: () => undefined,
+        onNotification: (method: string, handler: (params: Record<string, unknown>) => void) => {
+          notificationHandlers.set(method, handler);
+        },
+        onServerRequest: (method: CodexServerRequestMethod, handler: (request: { id: string; method: CodexServerRequestMethod; params: Record<string, unknown> }) => void) => {
+          serverRequestHandlers.set(method, handler);
+        },
+        close: () => undefined
+      }
+    });
+    server = await createServer(context);
+    await server.ready();
+    const { ws } = await openAuthedWs(context, server as TestServer);
+    const messages = collectWsMessages(ws);
+    await waitForWsMessage(messages, (message) => message.type === "sessions.snapshot");
+
+    sendCommand(ws, {
+      type: "session.sync.enable",
+      requestId: "r-sync-approval-followup",
+      sessionId: "thread-approval-followup",
+      activeDetail: false
+    });
+    await waitForWsMessage(messages, (message) => message.type === "thread.detail.snapshot" &&
+      message.sessionId === "thread-approval-followup");
+
+    serverRequestHandlers.get("item/commandExecution/requestApproval")?.({
+      id: "approval-followup",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-approval-followup",
+        turnId: "turn-original",
+        command: "date"
+      }
+    });
+    await waitForWsMessage(messages, (message) => message.type === "approval.updated" &&
+      message.sessionId === "thread-approval-followup" &&
+      message.approval !== null);
+
+    const beforeApprovalRespondIndex = messages.length;
+    sendCommand(ws, {
+      type: "approval.respond",
+      requestId: "r-approval-followup-respond",
+      sessionId: "thread-approval-followup",
+      approvalId: "approval-followup",
+      actionId: "decline",
+      answers: {
+        reason: { answers: ["不要运行命令，直接说明审批功能已触发并继续回复"] }
+      }
+    });
+    await waitForCondition(() => approvalResponses.length > 0);
+    await expect(hasNewWsMessage(messages, beforeApprovalRespondIndex, (message) => message.type === "approval.updated" &&
+      message.sessionId === "thread-approval-followup" &&
+      message.approval === null)).resolves.toBe(true);
+
+    expect(approvalResponses).toEqual([{
+      approvalId: "approval-followup",
+      result: { decision: "decline" }
+    }]);
+    expect(turnRequests).toEqual([]);
+
+    notificationHandlers.get("serverRequest/resolved")?.({
+      threadId: "thread-approval-followup",
+      requestId: "approval-followup"
+    });
+    expect(turnRequests).toEqual([]);
+
+    notificationHandlers.get("turn/completed")?.({
+      threadId: "thread-approval-followup",
+      turn: {
+        id: "turn-original",
+        status: "completed"
+      }
+    });
+
+    await waitForCondition(() => turnRequests.length === 1);
+    expect(turnRequests).toEqual([{
+      method: "turn/start",
+      threadId: "thread-approval-followup",
+      text: "不要运行命令，直接说明审批功能已触发并继续回复"
+    }]);
     ws.terminate();
   });
 

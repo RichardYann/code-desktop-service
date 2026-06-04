@@ -32,6 +32,12 @@ const PERMISSION_STRICT_TURN_ACTIONS = new Set(["grantForTurnWithStrictAutoRevie
 const PERMISSION_SESSION_ACTIONS = new Set(["acceptForSession", "grantForSession", "applyNetworkPolicyAmendment"]);
 const DECLINE_ACTIONS = new Set(["decline", "reject", "deny", "disallow", "no"]);
 const CANCEL_ACTIONS = new Set(["cancel", "dismiss", "abort"]);
+const APPROVAL_ADJUSTMENT_METHODS = new Set<CodexServerRequestMethod>([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "execCommandApproval",
+  "applyPatchApproval"
+]);
 
 function asRecord(value: unknown): JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
@@ -60,6 +66,37 @@ function firstPresentField(record: JsonRecord, fieldNames: string[]): unknown {
     if (Object.prototype.hasOwnProperty.call(record, fieldName)) return record[fieldName];
   }
   return undefined;
+}
+
+function firstApprovalAnswerText(answers: CodexApprovalAnswers | undefined, fieldId: string): string {
+  if (!answers) return "";
+  const field = answers[fieldId];
+  if (!field) return "";
+  for (const answer of field.answers) {
+    const trimmed = answer.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return "";
+}
+
+export function approvalAdjustmentTextFromAnswers(answers: CodexApprovalAnswers | undefined): string {
+  const preferred = firstApprovalAnswerText(answers, "reason") ||
+    firstApprovalAnswerText(answers, "declineReason") ||
+    firstApprovalAnswerText(answers, "adjustment") ||
+    firstApprovalAnswerText(answers, "answer");
+  if (preferred.length > 0) return preferred;
+  if (!answers) return "";
+  for (const key of Object.keys(answers)) {
+    const value = firstApprovalAnswerText(answers, key);
+    if (value.length > 0) return value;
+  }
+  return "";
+}
+
+export function shouldStartApprovalAdjustmentFollowup(input: CodexApprovalResponseInput): boolean {
+  if (!APPROVAL_ADJUSTMENT_METHODS.has(input.method)) return false;
+  if (!DECLINE_ACTIONS.has(input.actionId) && !CANCEL_ACTIONS.has(input.actionId)) return false;
+  return approvalAdjustmentTextFromAnswers(input.answers).length > 0;
 }
 
 function hasUsefulFields(record: JsonRecord): boolean {

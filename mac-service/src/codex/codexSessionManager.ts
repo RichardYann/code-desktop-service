@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CodexRequestMethod, CodexServerRequestMethod } from "./codexAppServerProtocol.js";
-import { mapCodexApprovalResponse, type CodexApprovalAnswers } from "./codexApprovalMapper.js";
+import { approvalAdjustmentTextFromAnswers, mapCodexApprovalResponse, type CodexApprovalAnswers } from "./codexApprovalMapper.js";
 import { normalizePlanStepStatus, type SessionPlanStep } from "./codexEventMapper.js";
 import {
   isRuntimeConfigParameterUnsupportedError,
@@ -161,56 +161,6 @@ function approvalTurnId(params: Record<string, unknown>): string | null {
   const turn = asRecord(params.turn);
   return stringOrNull(params.turnId) ?? stringOrNull(params.turn_id) ?? stringOrNull(turn.id) ??
     stringOrNull(turn.turnId) ?? stringOrNull(turn.turn_id);
-}
-
-const APPROVAL_ADJUSTMENT_ACTIONS = new Set(["decline", "reject", "deny", "disallow", "no", "cancel", "dismiss", "abort"]);
-const APPROVAL_ADJUSTMENT_METHODS = new Set<CodexServerRequestMethod>([
-  "item/commandExecution/requestApproval",
-  "item/fileChange/requestApproval",
-  "execCommandApproval",
-  "applyPatchApproval"
-]);
-
-function firstApprovalAnswerText(answers: CodexApprovalAnswers | undefined, fieldId: string): string {
-  if (!answers) return "";
-  const field = answers[fieldId];
-  if (!field) return "";
-  for (const answer of field.answers) {
-    const trimmed = answer.trim();
-    if (trimmed.length > 0) return trimmed;
-  }
-  return "";
-}
-
-function approvalAdjustmentTextFromAnswers(answers: CodexApprovalAnswers | undefined): string {
-  const preferred = firstApprovalAnswerText(answers, "reason") ||
-    firstApprovalAnswerText(answers, "declineReason") ||
-    firstApprovalAnswerText(answers, "adjustment") ||
-    firstApprovalAnswerText(answers, "answer");
-  if (preferred.length > 0) return preferred;
-  if (!answers) return "";
-  for (const key of Object.keys(answers)) {
-    const value = firstApprovalAnswerText(answers, key);
-    if (value.length > 0) return value;
-  }
-  return "";
-}
-
-function shouldSteerApprovalAdjustment(method: CodexServerRequestMethod, actionId: string, answers: CodexApprovalAnswers | undefined): boolean {
-  if (!APPROVAL_ADJUSTMENT_METHODS.has(method)) return false;
-  if (!APPROVAL_ADJUSTMENT_ACTIONS.has(actionId)) return false;
-  return approvalAdjustmentTextFromAnswers(answers).length > 0;
-}
-
-function isInactiveTurnSteerError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  return message.includes("not active") ||
-    message.includes("no active") ||
-    message.includes("not found") ||
-    message.includes("completed") ||
-    message.includes("expectedturnid") ||
-    message.includes("expected turn");
 }
 
 function normalizeTurnStatus(status: unknown): string {
@@ -1307,61 +1257,6 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
     const turn = asRecord(turnResponse.turn ?? turnResponse);
     return { turnId: String(turn.id ?? turn.turnId), status: normalizeTurnStatus(turn.status) };
   };
-  const approvalAdjustmentInput = (
-    request: PendingApprovalRecord,
-    answers: CodexApprovalAnswers | undefined
-  ): { threadId: string; turnId: string | null; text: string } | null => {
-    const text = approvalAdjustmentTextFromAnswers(answers);
-    if (text.length === 0) return null;
-    const threadId = approvalThreadId(request.params);
-    if (threadId === null || threadId.length === 0) return null;
-    const turnId = approvalTurnId(request.params);
-    return { threadId, turnId, text };
-  };
-  const steerApprovalAdjustmentIntoActiveTurn = async (
-    request: PendingApprovalRecord,
-    answers: CodexApprovalAnswers | undefined
-  ): Promise<boolean> => {
-    const input = approvalAdjustmentInput(request, answers);
-    if (input === null || input.turnId === null || input.turnId.length === 0) return false;
-    try {
-      logApprovalDebug("[codex] approval adjustment steer attempt", {
-        requestId: request.id,
-        method: request.method,
-        threadId: input.threadId,
-        turnId: input.turnId
-      });
-      await client.request("turn/steer", {
-        threadId: input.threadId,
-        expectedTurnId: input.turnId,
-        input: textInput(input.text)
-      });
-      return true;
-    } catch (error) {
-      if (!isInactiveTurnSteerError(error)) throw error;
-      logApprovalDebug("[codex] approval adjustment steer inactive", {
-        requestId: request.id,
-        method: request.method,
-        threadId: input.threadId,
-        turnId: input.turnId,
-        error: codexErrorMessage(error)
-      });
-      return false;
-    }
-  };
-  const startApprovalAdjustmentTurn = async (
-    request: PendingApprovalRecord,
-    answers: CodexApprovalAnswers | undefined
-  ): Promise<void> => {
-    const input = approvalAdjustmentInput(request, answers);
-    if (input === null) return;
-    logApprovalDebug("[codex] approval adjustment start turn", {
-      requestId: request.id,
-      method: request.method,
-      threadId: input.threadId
-    });
-    await startTurnInternal({ threadId: input.threadId, text: input.text });
-  };
   const createThread = async (input: CreateCodexThreadInput): Promise<{ threadId: string }> => {
     const threadResponse = asRecord(await client.request("thread/start", {
       cwd: createSessionCwd({ projectPath: input.projectPath, text: input.text }, options),
@@ -1517,21 +1412,15 @@ export function createCodexSessionManager(client: CodexSessionClient, options: C
       const request = pendingApprovals.get(requestId);
       if (!request) throw new Error("审批请求不存在或已处理");
       const response = mapCodexApprovalResponse({ method: request.method, actionId, answers, params: request.params });
-      const shouldSteer = shouldSteerApprovalAdjustment(request.method, actionId, answers);
       logApprovalDebug("[codex] approval respond", {
         requestId,
         method: request.method,
         actionId,
         threadId: approvalThreadId(request.params) ?? "",
         turnId: approvalTurnId(request.params) ?? "",
-        adjustmentLength: approvalAdjustmentTextFromAnswers(answers).length,
-        shouldSteer
+        adjustmentLength: approvalAdjustmentTextFromAnswers(answers).length
       });
       client.respond(requestId, response);
-      const didSteer = shouldSteer ? await steerApprovalAdjustmentIntoActiveTurn(request, answers) : false;
-      if (shouldSteer && !didSteer) {
-        await startApprovalAdjustmentTurn(request, answers);
-      }
     }
   };
 }
