@@ -1,3 +1,6 @@
+import { writeFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createTestAppContext } from "./helpers.js";
 
@@ -57,6 +60,36 @@ describe("mediaAssetService", () => {
     expect(artifact.url).toBe(`/api/assets/${artifact.id}/content`);
     expect(context.repositories.mediaAssets.get(artifact.id)?.relativePath).not.toContain("/Users/me/Desktop");
     expect((await context.mediaAssets.readAssetContent(artifact.id)).content.toString("utf8")).toBe("movie");
+  });
+
+  it("preserves Unicode file names while stripping desktop path separators", async () => {
+    const context = createTestAppContext();
+
+    const artifact = await context.mediaAssets.storeMacArtifactContent({
+      sessionId: "thread-1",
+      fileName: "C:\\综合维修车间\\3.物资相关\\管内物资清查_1 20260603.xlsx",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: Buffer.from("xlsx")
+    });
+
+    expect(artifact.fileName).toBe("管内物资清查_1 20260603.xlsx");
+    expect(artifact.kind).toBe("office");
+    expect(context.repositories.mediaAssets.get(artifact.id)?.relativePath).toContain("管内物资清查_1 20260603.xlsx");
+  });
+
+  it("keeps Unicode referenced desktop file names when copying a file reference", async () => {
+    const context = createTestAppContext();
+    const filePath = path.join(os.tmpdir(), "管内物资清查_2 20260603.docx");
+    await writeFile(filePath, "docx");
+
+    const artifact = await context.mediaAssets.storeMacFileReferenceAsset({
+      sessionId: "thread-1",
+      filePath
+    });
+
+    expect(artifact.fileName).toBe("管内物资清查_2 20260603.docx");
+    expect(artifact.kind).toBe("office");
+    await rm(filePath, { force: true });
   });
 
   it("rejects Mac file artifacts over 100M", async () => {

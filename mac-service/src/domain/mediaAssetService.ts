@@ -343,8 +343,25 @@ function assetContentUrl(assetId: string): string {
 }
 
 function safeFileName(fileName: string): string {
-  const normalized = path.basename(fileName.trim()).replace(/[^A-Za-z0-9._ -]/g, "_").trim();
+  const baseName = basenameFromAnyPlatformPath(fileName.trim());
+  let normalized = "";
+  for (const ch of baseName) {
+    normalized += isUnsafeFileNameCharacter(ch) ? "_" : ch;
+  }
+  normalized = normalized.replace(/\.\.+/g, "_").trim();
   return normalized.length > 0 ? normalized : "attachment.bin";
+}
+
+function basenameFromAnyPlatformPath(fileName: string): string {
+  const normalizedSeparators = fileName.replace(/\\/g, "/");
+  const segments = normalizedSeparators.split("/").filter((segment) => segment.length > 0);
+  return segments.length > 0 ? segments[segments.length - 1] : fileName;
+}
+
+function isUnsafeFileNameCharacter(ch: string): boolean {
+  if (ch < " " || ch === "\u007f") return true;
+  return ch === "<" || ch === ">" || ch === ":" || ch === "\"" || ch === "/" ||
+    ch === "\\" || ch === "|" || ch === "?" || ch === "*";
 }
 
 function safePathSegment(value: string): string {
