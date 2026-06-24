@@ -124,6 +124,13 @@ Codex preflight:
 curl -k https://127.0.0.1:37631/api/codex-preflight
 ```
 
+Linux helper scripts:
+
+```bash
+./scripts/start-linux-desktop-service.sh
+./scripts/show-linux-pairing-qr.sh
+```
+
 ## Configuration
 
 | Variable | Default | Description |
