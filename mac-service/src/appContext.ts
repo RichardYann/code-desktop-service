@@ -107,7 +107,7 @@ export function createAppContext(config: ServiceConfig = loadConfig(), options: 
     localMacId: desktopIdentity.id,
     localMacName: platform.resolveDisplayName(),
     transport,
-    certificateTrust: createCertificateTrustService(),
+    certificateTrust: createCertificateTrustService({ platform: platform.kind }),
     tls,
     refreshTransportCertificate: (): RefreshTransportCertificateResult => {
       const previousFingerprint = context.transport.fingerprint;

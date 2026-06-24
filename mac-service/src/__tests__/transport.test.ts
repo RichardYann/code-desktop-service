@@ -81,6 +81,19 @@ describe("transport security", () => {
     expect(subjectAltNames.ipAddresses).toContain("192.168.2.42");
   });
 
+  it("falls back to loopback SANs when interface enumeration fails", () => {
+    const subjectAltNames = collectDefaultTransportSubjectAltNames({
+      env: {},
+      hostname: () => "linux-box",
+      networkInterfaces: () => {
+        throw new Error("uv_interface_addresses failed");
+      }
+    });
+
+    expect(subjectAltNames.dnsNames).toEqual(["linux-box", "linux-box.local", "localhost"]);
+    expect(subjectAltNames.ipAddresses).toEqual(["127.0.0.1", "::1"]);
+  });
+
   it("regenerates the service certificate when subject alternative names change while keeping the same CA", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "code-transport-san-"));
     const first = ensureTransportCertificate(dir, {

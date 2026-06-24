@@ -28,6 +28,13 @@ corepack prepare pnpm@9.15.4 --activate
 
 确保本机已安装 Codex Desktop，或有可用的 Codex CLI/App Server 可执行文件。
 
+Linux 建议先确认本机 `codex` 已可直接执行，并且支持：
+
+```bash
+codex app-server --help
+codex remote-control --help
+```
+
 ## 2. Windows 快速安装
 
 在仓库根目录运行：
@@ -96,6 +103,15 @@ pnpm --filter @code/mac-service start
 node mac-service/dist/main.js
 ```
 
+Linux 常见启动方式：
+
+```bash
+export CODE_HOST=0.0.0.0
+export CODE_PORT=37631
+export CODEX_BIN="$(command -v codex)"
+node mac-service/dist/main.js
+```
+
 ## 4. 环境变量
 
 macOS/Linux shell 示例：
@@ -144,6 +160,8 @@ curl -k https://127.0.0.1:37631/api/codex-preflight
 
 请从桌面电脑本机打开 `https://localhost:37631`，在管理页执行证书信任安装。为了安全，安装信任动作只允许从 loopback 地址访问。
 
+Linux 当前不会自动安装或检测本地证书信任状态。如果浏览器提示证书不受信任，请按你的发行版和桌面环境手动信任，或在调试阶段继续使用允许忽略本地证书警告的客户端路径。
+
 如果浏览器安装信任后仍提示证书不受信任，请刷新页面或重启浏览器。
 
 ## 7. 配对移动端
@@ -158,7 +176,7 @@ curl -k https://127.0.0.1:37631/api/codex-preflight
 
 可在管理页添加项目根目录，用于移动端新建项目和创建会话时选择创建位置。
 
-Windows 上“选择文件夹”使用 PowerShell/.NET `FolderBrowserDialog`。如果当前桌面环境无法弹出系统窗口，请手动输入项目根目录路径。
+Windows 上“选择文件夹”使用 PowerShell/.NET `FolderBrowserDialog`。如果当前桌面环境无法弹出系统窗口，请手动输入项目根目录路径。Linux 当前请直接手动输入项目根目录路径。
 
 示例：
 

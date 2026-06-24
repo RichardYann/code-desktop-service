@@ -58,10 +58,23 @@ describe("findCodexBinary", () => {
   it("keeps existing macOS default candidates", () => {
     const result = findCodexBinary({
       env: {},
+      platform: "darwin",
       exists: (filePath) => filePath === "/opt/homebrew/bin/codex"
     });
 
     expect(result).toEqual({ ok: true, path: "/opt/homebrew/bin/codex" });
+  });
+
+  it("uses Linux PATH-first candidates", () => {
+    const result = findCodexBinary({
+      env: {
+        PATH: "/usr/local/bin:/usr/bin"
+      },
+      platform: "linux",
+      exists: (filePath) => filePath === path.join("/usr/local/bin", "codex")
+    });
+
+    expect(result).toEqual({ ok: true, path: path.join("/usr/local/bin", "codex") });
   });
 
   it("uses platform-neutral install guidance when Codex is unavailable", () => {

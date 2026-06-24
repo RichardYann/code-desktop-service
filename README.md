@@ -3,14 +3,16 @@
 [中文说明](./README.zh-CN.md)
 
 `code Desktop Service` is the desktop-side service for a paired mobile coding
-client. It runs on the user's Mac or Windows machine, connects to the local
+client. It runs on the user's Mac, Windows, or Linux machine, connects to the local
 Codex Desktop/App Server runtime, and exposes a local HTTPS/WebSocket API plus a
 lightweight management page for pairing, sessions, approvals, project roots,
 media assets, local web previews, and certificate trust.
 
 The implementation directory is still named `mac-service` for historical
-reasons. The current service includes platform support for both macOS and
-Windows.
+reasons. The current service includes platform support for macOS, Windows, and
+Linux. Linux currently targets Codex CLI connectivity plus pairing, sessions,
+and project-root management. Certificate trust automation, startup integration,
+system folder picking, and screen capture remain manual or unsupported on Linux.
 
 ## What Is Included
 
@@ -155,6 +157,12 @@ does not store shared CA private keys or service certificates.
   certificate trust installation.
 - Windows startup registration and capture automation are intentionally reported
   as unsupported when unavailable.
+- Linux supports the service runtime, HTTPS management page, QR pairing, manual
+  project-root configuration, and Codex CLI discovery from PATH or
+  `CODEX_BIN`.
+- Linux certificate trust installation, startup registration, system folder
+  picker, and capture automation are intentionally reported as unsupported in
+  this phase.
 
 ## Development
 

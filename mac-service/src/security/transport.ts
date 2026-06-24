@@ -117,12 +117,17 @@ export function collectDefaultTransportSubjectAltNames(input: {
   }
 
   const ipCandidates = ["127.0.0.1", "::1"];
-  for (const entries of Object.values(networkInterfaces())) {
-    for (const entry of entries ?? []) {
-      if (entry.family === "IPv4" && !entry.internal) {
-        ipCandidates.push(entry.address);
+  try {
+    for (const entries of Object.values(networkInterfaces())) {
+      for (const entry of entries ?? []) {
+        if (entry.family === "IPv4" && !entry.internal) {
+          ipCandidates.push(entry.address);
+        }
       }
     }
+  } catch {
+    // Some restricted Linux environments reject interface enumeration. Loopback
+    // SANs are enough to keep the local service bootable in that case.
   }
 
   return {

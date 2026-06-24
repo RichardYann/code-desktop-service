@@ -3,6 +3,7 @@ import os from "node:os";
 import type { ServiceConfig } from "../config.js";
 import type { CaptureRunner } from "../domain/captureService.js";
 import { createDarwinPlatform } from "./darwinPlatform.js";
+import { createLinuxPlatform } from "./linuxPlatform.js";
 import { createWindowsPlatform } from "./windowsPlatform.js";
 
 export type DesktopPlatformKind = "darwin" | "win32" | NodeJS.Platform;
@@ -63,6 +64,9 @@ export function createDesktopPlatform(input: DesktopPlatformInput = {}): Desktop
 
   if (deps.platform === "win32") {
     return createWindowsPlatform(deps);
+  }
+  if (deps.platform === "linux") {
+    return createLinuxPlatform(deps);
   }
   return createDarwinPlatform(deps);
 }

@@ -41,6 +41,9 @@ function defaultCandidates(platform: NodeJS.Platform): string[] {
   if (platform === "win32") {
     return ["codex.exe", "codex.cmd", "codex"];
   }
+  if (platform === "linux") {
+    return ["codex", "/usr/local/bin/codex", "/usr/bin/codex"];
+  }
   return [
     "/Applications/Codex.app/Contents/Resources/codex",
     "/opt/homebrew/bin/codex",

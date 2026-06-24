@@ -52,6 +52,25 @@ describe("desktop platform", () => {
     expect(platform.resolveDisplayName()).toBe("WIN-CODE");
   });
 
+  it("uses Linux XDG directories and Codex command candidates on linux", () => {
+    const platform = createDesktopPlatform({
+      platform: "linux",
+      env: {
+        XDG_DATA_HOME: "/home/demo/.local/share",
+        XDG_CURRENT_DESKTOP: "GNOME"
+      },
+      homedir: () => "/home/demo",
+      hostname: () => "fallback-host",
+      exists: () => false
+    });
+
+    expect(platform.kind).toBe("linux");
+    expect(platform.defaultDataDir()).toBe("/home/demo/.local/share/code-desktop-service");
+    expect(platform.defaultStartupDir()).toBe("/home/demo/.local/share/systemd/user");
+    expect(platform.defaultCodexBinaryCandidates()).toEqual(["codex", "/usr/local/bin/codex", "/usr/bin/codex"]);
+    expect(platform.resolveDisplayName()).toBe("GNOME");
+  });
+
   it("returns Windows startup semantics without LaunchAgent wording", async () => {
     const platform = createDesktopPlatform({
       platform: "win32",
@@ -86,6 +105,43 @@ describe("desktop platform", () => {
     expect(status.label).toContain("Windows");
     expect(status.path).toBe(startupDir);
     expect(status.message).toContain("Windows");
+    expect(status.message).not.toContain("LaunchAgent");
+  });
+
+  it("returns Linux startup semantics without LaunchAgent wording", async () => {
+    const platform = createDesktopPlatform({
+      platform: "linux",
+      env: {
+        XDG_DATA_HOME: "/home/demo/.local/share"
+      },
+      homedir: () => "/home/demo",
+      hostname: () => "fallback-host",
+      exists: () => false
+    });
+    const startupDir = platform.defaultStartupDir();
+    const service = platform.createStartupService({
+      startupDir,
+      serviceRoot: "/home/demo/code/mac-service",
+      nodePath: "/usr/bin/node",
+      startupCommand: "pnpm dev",
+      config: {
+        host: "0.0.0.0",
+        port: 37631,
+        dataDir: platform.defaultDataDir(),
+        codexBin: undefined,
+        projectRoots: [],
+        launchAgentDir: startupDir,
+        startupCommand: "pnpm dev"
+      }
+    });
+
+    const status = await service.status();
+
+    expect(status.supported).toBe(false);
+    expect(status.enabled).toBe(false);
+    expect(status.label).toContain("Linux");
+    expect(status.path).toBe(startupDir);
+    expect(status.message).toContain("Linux");
     expect(status.message).not.toContain("LaunchAgent");
   });
 
@@ -129,7 +185,10 @@ describe("desktop platform", () => {
       projectRoots: [],
       launchAgentDir: startupDir,
       startupCommand: "pnpm dev"
-    }, { platform });
+    }, {
+      platform,
+      collectTransportSubjectAltNames: () => ({ dnsNames: ["localhost"], ipAddresses: ["127.0.0.1"] })
+    });
 
     try {
       expect(context.localMacName).toBe("WIN-CODE");
@@ -152,6 +211,61 @@ describe("desktop platform", () => {
     }
   });
 
+  it("wires Linux app context defaults through the injected platform", async () => {
+    const platform = createDesktopPlatform({
+      platform: "linux",
+      env: {
+        XDG_DATA_HOME: "/home/demo/.local/share",
+        XDG_CURRENT_DESKTOP: "GNOME"
+      },
+      homedir: () => "/home/demo",
+      hostname: () => "fallback-host",
+      exists: () => false
+    });
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "code-linux-platform-"));
+    const startupDir = path.join(dataDir, "systemd-user");
+    const context = createAppContext({
+      host: "127.0.0.1",
+      port: 0,
+      dataDir,
+      codexBin: undefined,
+      codexCandidates: platform.defaultCodexBinaryCandidates(),
+      projectRoots: [],
+      launchAgentDir: startupDir,
+      startupCommand: "pnpm dev"
+    }, {
+      platform,
+      collectTransportSubjectAltNames: () => ({ dnsNames: ["localhost"], ipAddresses: ["127.0.0.1"] })
+    });
+
+    try {
+      expect(context.localMacName).toBe("GNOME");
+      await expect(context.startup.status()).resolves.toMatchObject({
+        supported: false,
+        enabled: false,
+        label: "Linux user service",
+        path: startupDir
+      });
+      await expect(context.capture.captureScreenScreenshot({
+        sessionId: "thread-1",
+        deviceId: "device-1",
+        userConfirmed: true
+      })).rejects.toMatchObject({
+        code: "CAPTURE_RUNNER_UNAVAILABLE",
+        message: "桌面端屏幕截图能力尚未接入"
+      });
+      await expect(context.certificateTrust.checkLocalCertificateTrust({
+        serverCertPath: path.join(dataDir, "missing.pem"),
+        hostname: "localhost"
+      })).resolves.toMatchObject({
+        supported: false,
+        trusted: false
+      });
+    } finally {
+      context.db.close();
+    }
+  });
+
   it("keeps one stable desktop id per service data directory", () => {
     const firstDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "code-desktop-id-a-"));
     const secondDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "code-desktop-id-b-"));
@@ -164,6 +278,8 @@ describe("desktop platform", () => {
       projectRoots: [],
       launchAgentDir: path.join(firstDataDir, "LaunchAgents"),
       startupCommand: "pnpm dev"
+    }, {
+      collectTransportSubjectAltNames: () => ({ dnsNames: ["localhost"], ipAddresses: ["127.0.0.1"] })
     });
     const restartedFirstContext = createAppContext({
       host: "127.0.0.1",
@@ -174,6 +290,8 @@ describe("desktop platform", () => {
       projectRoots: [],
       launchAgentDir: path.join(firstDataDir, "LaunchAgents"),
       startupCommand: "pnpm dev"
+    }, {
+      collectTransportSubjectAltNames: () => ({ dnsNames: ["localhost"], ipAddresses: ["127.0.0.1"] })
     });
     const secondContext = createAppContext({
       host: "127.0.0.1",
@@ -184,6 +302,8 @@ describe("desktop platform", () => {
       projectRoots: [],
       launchAgentDir: path.join(secondDataDir, "LaunchAgents"),
       startupCommand: "pnpm dev"
+    }, {
+      collectTransportSubjectAltNames: () => ({ dnsNames: ["localhost"], ipAddresses: ["127.0.0.1"] })
     });
 
     try {
